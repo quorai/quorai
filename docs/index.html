@@ -46,11 +46,14 @@
   </head>
   <body>
     <header class="hero">
-      <img
-        class="hero__logo"
-        src="assets/logo-detailed.jpeg"
-        alt="Quorai logo"
-      />
+      <picture>
+        <source srcset="assets/logo-detailed.webp" type="image/webp" />
+        <img
+          class="hero__logo"
+          src="assets/logo-detailed.jpeg"
+          alt="Quorai logo"
+        />
+      </picture>
       <p class="hero__tagline">
         <strong>quorai</strong> — a multi-agent AI trading system built on LangGraph.
         25 LLM analyst agents deliberate and vote on trading decisions through a portfolio manager.
