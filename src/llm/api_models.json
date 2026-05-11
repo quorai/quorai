@@ -1,0 +1,7 @@
+[
+  {
+    "display_name": "Gemini 2.5 Flash Lite (OpenRouter)",
+    "model_name": "google/gemini-2.5-flash-lite",
+    "provider": "OpenRouter"
+  }
+]

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quorai — Agent Gallery &amp; Trading Flow</title>
+    <meta
+      name="description"
+      content="A quorum of AI agents deliberating trading decisions. Browse all 25 analyst personas and explore the trading flow diagram."
+    />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  </head>
+  <body>
+    <header class="hero">
+      <img
+        class="hero__logo"
+        src="assets/logo-detailed.jpeg"
+        alt="Quorai logo"
+      />
+      <p class="hero__tagline">
+        <strong>quorai</strong> — a quorum of AI agents deliberating trading decisions.
+      </p>
+      <p class="hero__disclaimer">
+        ⚠️ Educational &amp; research use only. Not investment advice.
+        Past signals do not guarantee future performance.
+      </p>
+      <a
+        class="hero__cta"
+        href="https://github.com/nils-fl/quorai"
+        target="_blank"
+        rel="noopener"
+        >View on GitHub</a
+      >
+    </header>
+
+    <nav class="tabs" role="tablist" aria-label="Site views">
+      <button
+        class="tab tab--active"
+        role="tab"
+        aria-selected="true"
+        aria-controls="view-about"
+        data-tab="view-about"
+      >About</button>
+      <button
+        class="tab"
+        role="tab"
+        aria-selected="false"
+        aria-controls="view-agents"
+        data-tab="view-agents"
+      >Agents</button>
+      <button
+        class="tab"
+        role="tab"
+        aria-selected="false"
+        aria-controls="view-flow"
+        data-tab="view-flow"
+      >Trading Flow</button>
+    </nav>
+
+    <main>
+      <section id="view-agents" class="view" role="tabpanel">
+        <div id="gallery">
+          <p class="loading">Loading agents…</p>
+        </div>
+      </section>
+
+      <section id="view-flow" class="view" role="tabpanel">
+        <div id="flow-diagram">
+          <p class="loading">Select this tab to load the diagram…</p>
+        </div>
+      </section>
+
+      <section id="view-about" class="view view--active" role="tabpanel">
+        <div class="about-content">
+          <div class="about-section">
+            <h2 class="about-heading">What is Quorai?</h2>
+            <p>
+              Quorai is an open-source, educational proof-of-concept for AI-driven investment
+              analysis. A <em>quorum</em> of LLM agents — each embodying the investment philosophy
+              of a legendary investor — debates ticker signals, applies risk constraints, and
+              produces a final trading decision. No real trades are ever executed.
+            </p>
+            <p>
+              The name blends <strong>quorum</strong> (a deliberating body) with
+              <strong>AI</strong>, reflecting the system's core mechanic: structured disagreement
+              among agents before any conclusion is reached.
+            </p>
+          </div>
+
+          <div class="about-section">
+            <h2 class="about-heading">How it works</h2>
+            <ol class="about-steps">
+              <li>
+                <span class="step-num">1</span>
+                <div>
+                  <strong>Analyst agents</strong> — 25+ agents, each with a distinct investing
+                  persona and prompt, independently analyse each ticker using price history,
+                  fundamentals, insider trades, and news.
+                </div>
+              </li>
+              <li>
+                <span class="step-num">2</span>
+                <div>
+                  <strong>Debate node</strong> — when agents disagree on a ticker, an LLM
+                  moderator synthesises the conflicting views and produces a reconciled signal.
+                </div>
+              </li>
+              <li>
+                <span class="step-num">3</span>
+                <div>
+                  <strong>Risk manager</strong> — pure maths: volatility- and
+                  correlation-adjusted position limits are computed without an LLM call.
+                </div>
+              </li>
+              <li>
+                <span class="step-num">4</span>
+                <div>
+                  <strong>Portfolio manager</strong> — aggregates all signals and risk limits,
+                  then calls an LLM to emit a final <em>buy / sell / hold</em> decision with
+                  sizing and reasoning for each ticker.
+                </div>
+              </li>
+            </ol>
+          </div>
+
+          <div class="about-section">
+            <h2 class="about-heading">Analyst groups</h2>
+            <div class="about-groups">
+              <div class="about-group" style="--group-color:var(--c-deep-value)">
+                <div class="about-group__name">Deep Value</div>
+                <div class="about-group__desc">Graham, Buffett, Munger, Pabrai — margin-of-safety, intrinsic value.</div>
+              </div>
+              <div class="about-group" style="--group-color:var(--c-quality-compounders)">
+                <div class="about-group__name">Quality Compounders</div>
+                <div class="about-group__desc">Lynch, Fisher, Greenblatt — durable moats and earnings quality.</div>
+              </div>
+              <div class="about-group" style="--group-color:var(--c-growth-and-catalyst)">
+                <div class="about-group__name">Growth &amp; Catalyst</div>
+                <div class="about-group__desc">Ackman, Wood — high-conviction growth and activist-style catalysts.</div>
+              </div>
+              <div class="about-group" style="--group-color:var(--c-macro-and-cycle)">
+                <div class="about-group__name">Macro &amp; Cycle</div>
+                <div class="about-group__desc">Druckenmiller, Dalio, Marks — macro regime, credit cycle, risk balance.</div>
+              </div>
+              <div class="about-group" style="--group-color:var(--c-quant-systematic)">
+                <div class="about-group__name">Quant &amp; Systematic</div>
+                <div class="about-group__desc">Simons, Asness, Seykota — momentum, factors, systematic rules.</div>
+              </div>
+              <div class="about-group" style="--group-color:var(--c-sentiment-analytical)">
+                <div class="about-group__name">Sentiment &amp; Analytical</div>
+                <div class="about-group__desc">Jhunjhunwala, Taleb, Burry — sentiment, tail-risk, and contrarian reads.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="about-section">
+            <h2 class="about-heading">Run it yourself</h2>
+            <div class="about-modes">
+              <div class="about-mode">
+                <div class="about-mode__label">CLI</div>
+                <code class="about-code">uv run python src/main.py --ticker AAPL,MSFT</code>
+              </div>
+              <div class="about-mode">
+                <div class="about-mode__label">Backtest</div>
+                <code class="about-code">uv run python run_backtest.py</code>
+              </div>
+            </div>
+            <p class="about-note">
+              Requires an API key for at least one LLM provider (OpenAI, Anthropic, Groq, …) and
+              a Finnhub key for market data. See the
+              <a href="https://github.com/nils-fl/quorai" target="_blank" rel="noopener">README</a>
+              for full setup instructions.
+            </p>
+          </div>
+
+          <div class="about-section about-section--disclaimer">
+            <p>
+              ⚠️ <strong>Educational &amp; research use only.</strong> Quorai does not constitute
+              investment advice. Agent signals are generated by language models and should not be
+              used as the basis for real financial decisions. Past signals do not guarantee future
+              performance.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        MIT License · Built by
+        <a href="https://github.com/nils-fl" target="_blank" rel="noopener"
+          >Nils Flaschel</a
+        >
+        · Inspired by
+        <a
+          href="https://github.com/virattt/ai-hedge-fund"
+          target="_blank"
+          rel="noopener"
+          >virattt/ai-hedge-fund</a
+        >
+        &amp;
+        <a
+          href="https://github.com/TauricResearch/TradingAgents"
+          target="_blank"
+          rel="noopener"
+          >TauricResearch/TradingAgents</a
+        >
+      </p>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

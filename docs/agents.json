@@ -1,0 +1,271 @@
+{
+  "groups": [
+    {
+      "key": "deep_value",
+      "display_name": "Deep Value",
+      "description": "Find companies trading below intrinsic worth with a clear margin of safety, using hard numbers over narrative.",
+      "agents": [
+        {
+          "key": "ben_graham",
+          "display_name": "Ben Graham",
+          "description": "The Father of Value Investing",
+          "investing_style": "Emphasizes a margin of safety and invests in undervalued companies with strong fundamentals through systematic value analysis.",
+          "pull_quote": "Margin of safety first: I apply seven systematic rules — Graham Number, NCAV, P/E ≤ 15 — and never deviate for narrative.",
+          "order": 1,
+          "initials": "BG"
+        },
+        {
+          "key": "michael_burry",
+          "display_name": "Michael Burry",
+          "description": "The Big Short Contrarian",
+          "investing_style": "Makes contrarian bets, often shorting overvalued markets and investing in undervalued assets through deep fundamental analysis.",
+          "pull_quote": "Hunt value with hard numbers — FCF yield, EV/EBIT, balance sheet. Be contrarian: hatred in the press is your friend when fundamentals are solid.",
+          "order": 5,
+          "initials": "MB"
+        },
+        {
+          "key": "mohnish_pabrai",
+          "display_name": "Mohnish Pabrai",
+          "description": "The Dhandho Investor",
+          "investing_style": "Focuses on value investing and long-term growth through fundamental analysis and a margin of safety.",
+          "pull_quote": "Heads I win, tails I don't lose much: clone great investors, demand 8%+ FCF yield, keep it simple, and wait for the price to come to you.",
+          "order": 6,
+          "initials": "MP"
+        },
+        {
+          "key": "joel_greenblatt",
+          "display_name": "Joel Greenblatt",
+          "description": "The Magic Formula Investor",
+          "investing_style": "Ranks stocks by Magic Formula: high ROIC (quality) combined with high earnings yield (cheap). Looks for special situations — spin-offs, restructurings, insider buying — as catalysts.",
+          "pull_quote": "Magic Formula: rank by high ROIC plus high earnings yield, then wait for a special-situation catalyst — spin-off, insider buy — to unlock the value.",
+          "order": 23,
+          "initials": "JG"
+        }
+      ]
+    },
+    {
+      "key": "quality_compounders",
+      "display_name": "Quality Compounders",
+      "description": "Long-term ownership of durable franchises with strong moats, exceptional management, and compounding economics.",
+      "agents": [
+        {
+          "key": "aswath_damodaran",
+          "display_name": "Aswath Damodaran",
+          "description": "The Dean of Valuation",
+          "investing_style": "Focuses on intrinsic value and financial metrics to assess investment opportunities through rigorous valuation analysis.",
+          "pull_quote": "Start with the company story, connect it to FCFF drivers — growth, margins, reinvestment, risk — and let the DCF decide the price you should pay.",
+          "order": 0,
+          "initials": "AD"
+        },
+        {
+          "key": "charlie_munger",
+          "display_name": "Charlie Munger",
+          "description": "The Rational Thinker",
+          "investing_style": "Advocates for value investing with a focus on quality businesses and long-term growth through rational decision-making.",
+          "pull_quote": "Invert always: ask what makes it a terrible investment first, then let a lollapalooza of reinforcing moat signals earn your conviction.",
+          "order": 4,
+          "initials": "CM"
+        },
+        {
+          "key": "phil_fisher",
+          "display_name": "Phil Fisher",
+          "description": "The Scuttlebutt Investor",
+          "investing_style": "Emphasizes investing in companies with strong management and innovative products, focusing on long-term growth through scuttlebutt research.",
+          "pull_quote": "Exceptional management + sustained R&D-led growth + consistent margins: pay a fair price for a great business and hold it for decades.",
+          "order": 9,
+          "initials": "PF"
+        },
+        {
+          "key": "warren_buffett",
+          "display_name": "Warren Buffett",
+          "description": "The Oracle of Omaha",
+          "investing_style": "Seeks companies with strong fundamentals and competitive advantages through value investing and long-term ownership.",
+          "pull_quote": "Buy wonderful businesses with durable moats and exceptional capital allocation at a price that gives a margin of safety, then never sell.",
+          "order": 12,
+          "initials": "WB"
+        }
+      ]
+    },
+    {
+      "key": "growth_and_catalyst",
+      "display_name": "Growth & Catalyst",
+      "description": "Disruptive innovation, activist catalysts, and outsized growth potential at a price the market hasn't yet recognised.",
+      "agents": [
+        {
+          "key": "bill_ackman",
+          "display_name": "Bill Ackman",
+          "description": "The Activist Investor",
+          "investing_style": "Seeks to influence management and unlock value through strategic activism and contrarian investment positions.",
+          "pull_quote": "Identify the specific lever — board change, spin-off, buyback — that can re-rate a high-quality franchise by 50–100%.",
+          "order": 2,
+          "initials": "BA"
+        },
+        {
+          "key": "cathie_wood",
+          "display_name": "Cathie Wood",
+          "description": "The Queen of Growth Investing",
+          "investing_style": "Focuses on disruptive innovation and growth, investing in companies that are leading technological advancements and market disruption.",
+          "pull_quote": "Bet on disruptive innovation with a massive TAM; accept the volatility — exponential growth rewards patience on a multi-year horizon.",
+          "order": 3,
+          "initials": "CW"
+        },
+        {
+          "key": "peter_lynch",
+          "display_name": "Peter Lynch",
+          "description": "The 10-Bagger Investor",
+          "investing_style": "Invests in companies with understandable business models and strong growth potential using the 'buy what you know' strategy.",
+          "pull_quote": "Buy what you know: if the PEG is cheap and the business is simple enough to explain to a twelve-year-old, it could be a ten-bagger.",
+          "order": 8,
+          "initials": "PL"
+        },
+        {
+          "key": "growth_analyst",
+          "display_name": "Growth Analyst",
+          "description": "Growth Specialist",
+          "investing_style": "Analyzes growth trends and valuation to identify growth opportunities through growth analysis.",
+          "pull_quote": "Follow revenue acceleration and expanding margins — when growth is durable and valuation is still reasonable, the compounding does the work.",
+          "order": 15,
+          "initials": "GA"
+        }
+      ]
+    },
+    {
+      "key": "macro_and_cycle",
+      "display_name": "Macro & Cycle",
+      "description": "Top-down regime analysis — debt cycles, liquidity flows, and tail-risk awareness — to time and size positions.",
+      "agents": [
+        {
+          "key": "nassim_taleb",
+          "display_name": "Nassim Taleb",
+          "description": "The Black Swan Risk Analyst",
+          "investing_style": "Focuses on tail risk, antifragility, and asymmetric payoffs. Uses barbell strategy, avoids fragile companies via negativa, and seeks convex positions with limited downside and unlimited upside.",
+          "pull_quote": "Seek the antifragile: convex payoffs with bounded downside, avoid the fragile, and never mistake low volatility for safety.",
+          "order": 7,
+          "initials": "NT"
+        },
+        {
+          "key": "rakesh_jhunjhunwala",
+          "display_name": "Rakesh Jhunjhunwala",
+          "description": "The Big Bull Of India",
+          "investing_style": "Leverages macroeconomic insights to invest in high-growth sectors, particularly within emerging markets and domestic opportunities.",
+          "pull_quote": "Structural tailwind + earnings quality + low leverage + market leadership + contrarian timing — that is how you find multi-decade compounders.",
+          "order": 10,
+          "initials": "RJ"
+        },
+        {
+          "key": "stanley_druckenmiller",
+          "display_name": "Stanley Druckenmiller",
+          "description": "The Macro Investor",
+          "investing_style": "Focuses on macroeconomic trends, making large bets on currencies, commodities, and interest rates through top-down analysis.",
+          "pull_quote": "Macro regime first: liquidity and rates determine the tide; when the thesis is clear, size very large and cut the moment it changes.",
+          "order": 11,
+          "initials": "SD"
+        },
+        {
+          "key": "ray_dalio",
+          "display_name": "Ray Dalio",
+          "description": "The All-Weather Macro Investor",
+          "investing_style": "Applies the debt-cycle framework, economic-regime analysis, and risk-parity principles to assess whether an equity is positioned for all-weather resilience.",
+          "pull_quote": "Understand the debt cycle and economic regime — resilient balance sheets bought cheaply in early-cycle fear are the foundation of all-weather returns.",
+          "order": 19,
+          "initials": "RD"
+        },
+        {
+          "key": "howard_marks",
+          "display_name": "Howard Marks",
+          "description": "The Credit Cycle Master",
+          "investing_style": "Focuses on market cycles, second-level thinking, and credit quality. Seeks assets where fear-driven pricing offers a margin of safety and the risk premium adequately compensates.",
+          "pull_quote": "Second-level thinking: ask what the price implies and what the crowd is missing — the best entries come when fear drives pricing below fair value.",
+          "order": 20,
+          "initials": "HM"
+        }
+      ]
+    },
+    {
+      "key": "quant_systematic",
+      "display_name": "Quant & Systematic",
+      "description": "Rule-based factor models, trend-following, and statistical arbitrage — data decides, narrative is noise.",
+      "agents": [
+        {
+          "key": "technical_analyst",
+          "display_name": "Technical Analyst",
+          "description": "Chart Pattern Specialist",
+          "investing_style": "Focuses on chart patterns and market trends to make investment decisions, often using technical indicators and price action analysis.",
+          "pull_quote": "Trend, momentum, mean-reversion, and volatility signals combined by weight — the tape tells the truth when charts are read without emotion.",
+          "order": 13,
+          "initials": "TA"
+        },
+        {
+          "key": "cliff_asness",
+          "display_name": "Cliff Asness",
+          "description": "The Quant Factor Investor",
+          "investing_style": "Applies AQR's multi-factor framework: value, 12-1 momentum, quality (ROIC + margins + earnings stability), and low-volatility. Signals driven by factor-score composites, not narratives.",
+          "pull_quote": "Value + momentum + quality + low-vol all aligned is the highest conviction signal; never let narrative override the factor scores.",
+          "order": 21,
+          "initials": "CA"
+        },
+        {
+          "key": "ed_seykota",
+          "display_name": "Ed Seykota",
+          "description": "The Trend-Following Pioneer",
+          "investing_style": "Systematic CTA: rides trends confirmed by 200-MA, Donchian breakouts, and momentum; sizes positions by ATR volatility; cuts losers mercilessly.",
+          "pull_quote": "The trend is your friend until the bend: ride the Donchian breakout, size by ATR volatility, and cut losers the instant the trend reverses.",
+          "order": 22,
+          "initials": "ES"
+        },
+        {
+          "key": "jim_simons",
+          "display_name": "Jim Simons",
+          "description": "The Quant / Stat-Arb Legend",
+          "investing_style": "Renaissance-style statistical arbitrage: mean-reversion Z-scores, return autocorrelation, volume microstructure, and Hurst exponent regime detection. Pure data, no narrative.",
+          "pull_quote": "No narrative, only data: Hurst below 0.5 means mean-reversion is our edge — Z-scores, autocorrelation, and volume microstructure decide every trade.",
+          "order": 24,
+          "initials": "JS"
+        }
+      ]
+    },
+    {
+      "key": "sentiment_and_analytical",
+      "display_name": "Sentiment & Analytical",
+      "description": "Bottom-up specialists in fundamentals, valuation, growth signals, and market-sentiment indicators.",
+      "agents": [
+        {
+          "key": "fundamentals_analyst",
+          "display_name": "Fundamentals Analyst",
+          "description": "Financial Statement Specialist",
+          "investing_style": "Delves into financial statements and economic indicators to assess the intrinsic value of companies through fundamental analysis.",
+          "pull_quote": "Score profitability, growth, financial health, and efficiency systematically — when three of four dimensions align bullish, the signal is robust.",
+          "order": 14,
+          "initials": "FA"
+        },
+        {
+          "key": "news_sentiment_analyst",
+          "display_name": "News Sentiment Analyst",
+          "description": "News Sentiment Specialist",
+          "investing_style": "Analyzes news sentiment to predict market movements and identify opportunities through news analysis.",
+          "pull_quote": "Read the news flow quantitatively: positive sentiment breadth and rising coverage predict price momentum before it shows up in fundamentals.",
+          "order": 16,
+          "initials": "NSA"
+        },
+        {
+          "key": "sentiment_analyst",
+          "display_name": "Sentiment Analyst",
+          "description": "Market Sentiment Specialist",
+          "investing_style": "Gauges market sentiment and investor behavior to predict market movements and identify opportunities through behavioral analysis.",
+          "pull_quote": "Market psychology leaves measurable footprints — insider activity, put/call ratios, short interest — read the crowd to trade against its worst impulses.",
+          "order": 17,
+          "initials": "SA"
+        },
+        {
+          "key": "valuation_analyst",
+          "display_name": "Valuation Analyst",
+          "description": "Company Valuation Specialist",
+          "investing_style": "Specializes in determining the fair value of companies, using various valuation models and financial metrics for investment decisions.",
+          "pull_quote": "Model DCF, owner earnings, EV/EBITDA, and P/E together — when multiple methods converge on undervaluation, the margin of safety is real.",
+          "order": 18,
+          "initials": "VA"
+        }
+      ]
+    }
+  ]
+}
