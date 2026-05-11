@@ -8,7 +8,7 @@
 
 A proof of concept for a multi-agent AI trading system. For **educational purposes only** — not intended for real trading or investment.
 
-**[GitHub](https://github.com/nils-fl/quorai)** · **[Live demo](https://nils-fl.github.io/quorai/)**
+**[GitHub](https://github.com/nils-fl/quorai)** · **[About](https://nils-fl.github.io/quorai/)**
 
 The system runs multiple analyst agents (value, growth, macro, technical, fundamentals, sentiment, risk) that collaborate through a portfolio manager to produce trading decisions.
 
