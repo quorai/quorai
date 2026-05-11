@@ -54,8 +54,8 @@ a:hover { text-decoration: underline; }
 
 .hero__logo {
   width: 100%;
-  max-width: 780px;
-  height: 340px;
+  max-width: 360px;
+  height: 180px;
   object-fit: cover;
   object-position: top;
   border-radius: 16px;
