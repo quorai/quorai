@@ -560,6 +560,7 @@ def get_company_news(
                 source=r.get("source", ""),
                 date=date_str,
                 url=r.get("url", ""),
+                summary=r.get("summary") or None,
                 sentiment=None,  # Finnhub /company-news does not include sentiment
             )
         )

@@ -106,6 +106,7 @@ class CompanyNews(BaseModel):
     source: str
     date: str
     url: str
+    summary: str | None = None
     sentiment: str | None = None
 
 

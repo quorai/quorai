@@ -1,25 +1,91 @@
+import datetime
 import json
+import re
 
 from langchain_core.messages import HumanMessage
-import numpy as np
-import pandas as pd
 from pydantic import AliasChoices, BaseModel, Field
 from typing_extensions import Literal
 
+from src.data.models import CompanyNews
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import get_company_news
 from src.utils.api_key import get_api_key_from_state
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
+NEWS_SENTIMENT_MAX_ARTICLES = 20
+RECENCY_HALF_LIFE_DAYS = 3
+FALLBACK_ARTICLE_AGE_DAYS = 7.0
 
+_SIGNAL_TO_SENTIMENT = {"bullish": "positive", "bearish": "negative", "neutral": "neutral"}
+
+
+def _dedupe_articles(articles: list[CompanyNews]) -> list[CompanyNews]:
+    """Remove duplicate headlines, keeping the first (most recent) occurrence."""
+    seen: set[str] = set()
+    result = []
+    for a in articles:
+        norm = re.sub(r"\W+", " ", a.title.lower()).strip()
+        if norm not in seen:
+            seen.add(norm)
+            result.append(a)
+    return result
+
+
+def _article_age_days(news: CompanyNews, ref_dt: datetime.datetime) -> float:
+    try:
+        article_dt = datetime.datetime.fromisoformat(news.date)
+        if article_dt.tzinfo is None:
+            article_dt = article_dt.replace(tzinfo=datetime.timezone.utc)
+        return max(0.0, (ref_dt - article_dt).total_seconds() / 86400)
+    except Exception:
+        return FALLBACK_ARTICLE_AGE_DAYS
+
+
+class ArticleSentiment(BaseModel):
+    """Sentiment classification for one article in a batch."""
+
+    index: int
+    sentiment: Literal["positive", "negative", "neutral"]
+    confidence: int = Field(description="Confidence 0-100", validation_alias=AliasChoices("confidence", "confidence_score"))
+
+
+class BatchSentiment(BaseModel):
+    """Batch sentiment response for multiple articles."""
+
+    articles: list[ArticleSentiment]
+
+
+# Kept for backwards compatibility with existing tests.
 class Sentiment(BaseModel):
-    """Represents the sentiment of a news article."""
+    """Represents the sentiment of a single news article."""
 
     sentiment: Literal["positive", "negative", "neutral"]
-    confidence: int = Field(
-        description="Confidence 0-100",
-        validation_alias=AliasChoices("confidence", "confidence_score"),
+    confidence: int = Field(description="Confidence 0-100", validation_alias=AliasChoices("confidence", "confidence_score"))
+
+
+def _build_batch_prompt(ticker: str, articles: list[CompanyNews]) -> str:
+    """Build the batched sentiment classification prompt with disambiguation rules and examples."""
+    lines = []
+    for i, a in enumerate(articles, start=1):
+        suffix = f" — {a.summary}" if a.summary else ""
+        lines.append(f"{i}. [{a.date[:10]}] {a.title}{suffix}")
+    numbered = "\n".join(lines)
+    return (
+        f"You are a financial news sentiment classifier for stock {ticker}.\n\n"
+        f"Rules:\n"
+        f"- Classify each article as positive, negative, or neutral for {ticker} ONLY.\n"
+        f"- If the article is not primarily about {ticker} (e.g., it covers a competitor,\n"
+        f"  broad market moves, or macro events that do not directly affect {ticker}),\n"
+        f"  return neutral with confidence ≤ 30.\n"
+        f"- Provide a confidence score 0-100 for each classification.\n\n"
+        f"Examples (for {ticker}):\n"
+        f'A. "{ticker} reports record quarterly revenue, beating estimates by 12%"\n'
+        f'   → {{"index": 1, "sentiment": "positive", "confidence": 88}}\n'
+        f'B. "Competitor announces aggressive price cuts in key market"\n'
+        f'   → {{"index": 2, "sentiment": "neutral", "confidence": 12}}\n\n'
+        f'Respond ONLY with JSON: {{"articles": [{{"index": 1, "sentiment": "...", "confidence": 0-100}}, ...]}}\n\n'
+        f"{numbered}"
     )
 
 
@@ -27,16 +93,9 @@ def news_sentiment_agent(state: AgentState, agent_id: str = "news_sentiment_agen
     """
     Analyzes news sentiment for a list of tickers and generates trading signals.
 
-    This agent fetches company news, uses an LLM to classify the sentiment of articles
-    with missing sentiment data, and then aggregates the sentiments to produce an
-    overall signal (bullish, bearish, or neutral) and a confidence score for each ticker.
-
-    Args:
-        state: The current state of the agent graph.
-        agent_id: The ID of the agent.
-
-    Returns:
-        A dictionary containing the updated state with the agent's analysis.
+    Fetches company news, deduplicates headlines, classifies all candidate articles
+    in a single batched LLM call, then aggregates using recency-weighted sentiment
+    mass to produce a signal and confidence score for each ticker.
     """
     data = state.get("data", {})
     end_date = data.get("end_date")
@@ -44,90 +103,113 @@ def news_sentiment_agent(state: AgentState, agent_id: str = "news_sentiment_agen
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
     sentiment_analysis = {}
 
+    try:
+        ref_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    except Exception:
+        ref_dt = datetime.datetime.now(datetime.timezone.utc)
+
     for ticker in tickers:
         progress.update_status(agent_id, ticker, "Fetching company news")
-        company_news = get_company_news(
-            ticker=ticker,
-            end_date=end_date,
-            limit=100,
-            api_key=api_key,
-        )
+        company_news = get_company_news(ticker=ticker, end_date=end_date, limit=100, api_key=api_key) or []
 
-        company_news = company_news or []
-        news_signals = []
-        sentiment_confidences = {}  # Store confidence scores for each article
+        articles_classified: list[CompanyNews] = []
+        sentiment_confidences: dict[str, int] = {}
         sentiments_classified_by_llm = 0
 
         if company_news:
-            # Check the 10 most recent articles
-            recent_articles = company_news[:10]
-            articles_without_sentiment = [news for news in recent_articles if news.sentiment is None]
+            pool = _dedupe_articles(company_news[: NEWS_SENTIMENT_MAX_ARTICLES * 2])[:NEWS_SENTIMENT_MAX_ARTICLES]
+            to_classify = [a for a in pool if a.sentiment is None]
 
-            # Analyze only the 5 most recent articles without sentiment to reduce LLM calls
-            if articles_without_sentiment:
-                # We only take the first 5 articles, but this is configurable
-                num_articles_to_analyze = 5
-                articles_to_analyze = articles_without_sentiment[:num_articles_to_analyze]
-                progress.update_status(agent_id, ticker, f"Analyzing sentiment for {len(articles_to_analyze)} articles")
+            if to_classify:
+                progress.update_status(agent_id, ticker, f"Classifying {len(to_classify)} articles (batched)")
+                prompt = _build_batch_prompt(ticker, to_classify)
+                batch = call_llm(prompt, BatchSentiment, agent_name=agent_id, state=state)
+                by_index = {r.index: r for r in batch.articles} if batch else {}
 
-                for idx, news in enumerate(articles_to_analyze):
-                    # We analyze based on title, but can also pass in the entire article text,
-                    # but this is more expensive and requires extracting the text from the article.
-                    # Note: this is an opportunity for improvement!
-                    progress.update_status(agent_id, ticker, f"Analyzing sentiment for article {idx + 1} of {len(articles_to_analyze)}")
-                    prompt = (
-                        f"Analyze the sentiment of the following news headline for stock {ticker}.\n"
-                        f"Classify sentiment as one of: positive, negative, neutral (for {ticker} only).\n"
-                        f"Respond ONLY with JSON of the form:\n"
-                        f'{{"sentiment": "positive" | "negative" | "neutral", "confidence": <int 0-100>}}\n\n'
-                        f"Headline: {news.title}"
-                    )
-                    response = call_llm(prompt, Sentiment, agent_name=agent_id, state=state)
-                    if response:
-                        news.sentiment = response.sentiment.lower()
-                        sentiment_confidences[id(news)] = response.confidence
+                for i, article in enumerate(to_classify, start=1):
+                    result = by_index.get(i)
+                    if result:
+                        article.sentiment = result.sentiment.lower()
+                        sentiment_confidences[article.url] = result.confidence
                     else:
-                        news.sentiment = "neutral"
-                        sentiment_confidences[id(news)] = 0
-                    sentiments_classified_by_llm += 1
+                        article.sentiment = "neutral"
+                        sentiment_confidences[article.url] = 0
+                sentiments_classified_by_llm = len(to_classify)
 
-            # Aggregate sentiment across all articles
-            sentiment = pd.Series([n.sentiment for n in company_news]).dropna()
-            news_signals = np.where(sentiment == "negative", "bearish", np.where(sentiment == "positive", "bullish", "neutral")).tolist()
+            articles_classified = [a for a in pool if a.sentiment is not None]
 
         progress.update_status(agent_id, ticker, "Aggregating signals")
 
-        # Calculate the sentiment signals
-        bullish_signals = news_signals.count("bullish")
-        bearish_signals = news_signals.count("bearish")
-        neutral_signals = news_signals.count("neutral")
+        weighted_bullish = 0.0
+        weighted_bearish = 0.0
+        weighted_neutral = 0.0
+        total_weight = 0.0
+        bullish_raw = 0
+        bearish_raw = 0
+        neutral_raw = 0
+        article_payloads: list[dict] = []
 
-        if bullish_signals > bearish_signals:
+        for article in articles_classified:
+            age = _article_age_days(article, ref_dt)
+            weight = 0.5 ** (age / RECENCY_HALF_LIFE_DAYS)
+            if article.sentiment == "positive":
+                signal_label = "bullish"
+                weighted_bullish += weight
+                bullish_raw += 1
+            elif article.sentiment == "negative":
+                signal_label = "bearish"
+                weighted_bearish += weight
+                bearish_raw += 1
+            else:
+                signal_label = "neutral"
+                weighted_neutral += weight
+                neutral_raw += 1
+            total_weight += weight
+            article_payloads.append(
+                {
+                    "title": article.title,
+                    "signal": signal_label,
+                    "confidence": sentiment_confidences.get(article.url, 0),
+                    "age_days": round(age, 2),
+                    "weight": round(weight, 4),
+                }
+            )
+
+        article_payloads.sort(key=lambda x: x["weight"], reverse=True)
+        article_payloads = article_payloads[:10]
+        total_raw = bullish_raw + bearish_raw + neutral_raw
+
+        if weighted_bullish > weighted_bearish and weighted_bullish > weighted_neutral:
             overall_signal = "bullish"
-        elif bearish_signals > bullish_signals:
+        elif weighted_bearish > weighted_bullish and weighted_bearish > weighted_neutral:
             overall_signal = "bearish"
         else:
             overall_signal = "neutral"
 
-        total_signals = len(news_signals)
-        confidence = _calculate_confidence_score(sentiment_confidences=sentiment_confidences, company_news=company_news, overall_signal=overall_signal, bullish_signals=bullish_signals, bearish_signals=bearish_signals, total_signals=total_signals)
+        confidence = _calculate_confidence_score(
+            sentiment_confidences=sentiment_confidences,
+            company_news=articles_classified,
+            overall_signal=overall_signal,
+            bullish_signals=weighted_bullish,
+            bearish_signals=weighted_bearish,
+            total_signals=total_weight,
+        )
 
-        # Create reasoning for the news sentiment
         reasoning = {
             "news_sentiment": {
                 "signal": overall_signal,
                 "confidence": confidence,
                 "metrics": {
-                    "total_articles": total_signals,
-                    "bullish_articles": bullish_signals,
-                    "bearish_articles": bearish_signals,
-                    "neutral_articles": neutral_signals,
+                    "total_articles": total_raw,
+                    "bullish_articles": bullish_raw,
+                    "bearish_articles": bearish_raw,
+                    "neutral_articles": neutral_raw,
                     "articles_classified_by_llm": sentiments_classified_by_llm,
+                    "articles": article_payloads,
                 },
             }
         }
 
-        # Create the sentiment analysis
         sentiment_analysis[ticker] = {
             "signal": overall_signal,
             "confidence": confidence,
@@ -136,10 +218,7 @@ def news_sentiment_agent(state: AgentState, agent_id: str = "news_sentiment_agen
 
         progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
 
-    message = HumanMessage(
-        content=json.dumps(sentiment_analysis),
-        name=agent_id,
-    )
+    message = HumanMessage(content=json.dumps(sentiment_analysis), name=agent_id)
 
     if state.get("metadata", {}).get("show_reasoning"):
         show_agent_reasoning(sentiment_analysis, "News Sentiment Analysis Agent")
@@ -150,46 +229,28 @@ def news_sentiment_agent(state: AgentState, agent_id: str = "news_sentiment_agen
 
     progress.update_status(agent_id, None, "Done")
 
-    return {
-        "messages": [message],
-        "data": state["data"],
-    }
+    return {"messages": [message], "data": state["data"]}
 
 
-def _calculate_confidence_score(sentiment_confidences: dict, company_news: list, overall_signal: str, bullish_signals: int, bearish_signals: int, total_signals: int) -> float:
+def _calculate_confidence_score(sentiment_confidences: dict, company_news: list, overall_signal: str, bullish_signals: float, bearish_signals: float, total_signals: float) -> float:
     """
     Calculate confidence score for a sentiment signal.
 
     Uses a weighted approach combining LLM confidence scores (70%) with
     signal proportion (30%) when LLM classifications are available.
-
-    Args:
-        sentiment_confidences: Dictionary mapping news article IDs to confidence scores.
-        company_news: List of CompanyNews objects.
-        overall_signal: The overall sentiment signal ("bullish", "bearish", or "neutral").
-        bullish_signals: Count of bullish signals.
-        bearish_signals: Count of bearish signals.
-        total_signals: Total number of signals.
-
-    Returns:
-        Confidence score as a float between 0 and 100.
+    bullish_signals, bearish_signals, total_signals may be recency-weighted floats.
     """
     if total_signals == 0:
         return 0.0
 
-    # Calculate weighted confidence using LLM confidence scores when available
     if sentiment_confidences:
-        # Get articles that match the overall signal
-        matching_articles = [news for news in company_news if news.sentiment and ((overall_signal == "bullish" and news.sentiment == "positive") or (overall_signal == "bearish" and news.sentiment == "negative") or (overall_signal == "neutral" and news.sentiment == "neutral"))]
-
-        # Calculate average confidence from LLM-classified articles that match the signal
-        llm_confidences = [sentiment_confidences[id(news)] for news in matching_articles if id(news) in sentiment_confidences]
+        target_sentiment = _SIGNAL_TO_SENTIMENT[overall_signal]
+        matching_articles = [news for news in company_news if news.sentiment == target_sentiment]
+        llm_confidences = [sentiment_confidences[news.url] for news in matching_articles if news.url in sentiment_confidences]
 
         if llm_confidences:
-            # Weight: 70% from LLM confidence scores, 30% from signal proportion
             avg_llm_confidence = sum(llm_confidences) / len(llm_confidences)
             signal_proportion = (max(bullish_signals, bearish_signals) / total_signals) * 100
             return round(0.7 * avg_llm_confidence + 0.3 * signal_proportion, 2)
 
-    # Fallback to proportion-based confidence
     return round((max(bullish_signals, bearish_signals) / total_signals) * 100, 2)
