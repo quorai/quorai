@@ -4,19 +4,17 @@ load_dotenv()
 
 from src.backtesting.engine import BacktestEngine  # noqa: E402
 from src.main import run_quorai  # noqa: E402
-from src.utils.analysts import ANALYST_ORDER  # noqa: E402
-
-ALL_ANALYSTS = [key for _, key in ANALYST_ORDER]
+from src.utils.analysts import ALL_ANALYST_KEYS  # noqa: E402
 
 engine = BacktestEngine(
     agent=run_quorai,
-    tickers=["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN", "META", "NVDA"],
-    start_date="2026-02-01",
-    end_date="2026-02-28",
+    tickers=["AAPL", "MSFT"],
+    start_date="2026-04-11",
+    end_date="2026-05-11",
     initial_capital=1_000.0,
-    model_name="google/gemini-2.5-flash-lite",
+    model_name="deepseek/deepseek-v4-flash",
     model_provider="OpenRouter",
-    selected_analysts=["technical_analyst", "fundamentals_analyst", "warren_buffett", "stanley_druckenmiller", "cathie_wood", "nassim_taleb"],
+    selected_analysts=ALL_ANALYST_KEYS,
     initial_margin_requirement=0.0,
 )
 

@@ -8,6 +8,8 @@
 
 A proof of concept for a multi-agent AI trading system. For **educational purposes only** — not intended for real trading or investment.
 
+**[GitHub](https://github.com/nils-fl/quorai)** · **[Live demo](https://nils-fl.github.io/quorai/)**
+
 The system runs multiple analyst agents (value, growth, macro, technical, fundamentals, sentiment, risk) that collaborate through a portfolio manager to produce trading decisions.
 
 ## Disclaimer
@@ -44,15 +46,35 @@ ANTHROPIC_API_KEY=...
 GROQ_API_KEY=...
 OPENROUTER_API_KEY=...
 
-# Financial data
-FINANCIAL_DATASETS_API_KEY=...
+# Financial data (Finnhub)
+FINNHUB_API_KEY=...
 ```
 
 ## Usage
 
 ### Backtesting
 
-Edit `run_backtest.py` to configure tickers, date range, model, and analysts, then run:
+Run from the CLI (same flag shape as live trading):
+
+```bash
+uv run python -m src.backtesting \
+    --tickers AAPL,MSFT \
+    --model deepseek/deepseek-v4-flash \
+    --model-provider OpenRouter \
+    --show-reasoning
+```
+
+Key flags:
+- `--tickers` — comma-separated list of tickers (required)
+- `--model` — model name (required)
+- `--model-provider` — provider string; bypasses catalog, accepts any OpenRouter/provider slug
+- `--analysts` — comma-separated analyst IDs (default: all)
+- `--start-date` / `--end-date` — YYYY-MM-DD (default: last month → today)
+- `--initial-capital` — starting cash (default: 100 000)
+- `--show-reasoning` — print each agent's reasoning
+- `--temperature` — LLM temperature override
+
+Alternatively, edit `run_backtest.py` to hardcode the config and run:
 
 ```bash
 uv run python run_backtest.py
@@ -109,12 +131,13 @@ The bot replies with a confirmation message when a command is recognised. Comman
 | Path | Purpose |
 |---|---|
 | `src/` | Core library: agents, backtesting engine, LLM dispatch, data fetching, live trading |
-| `src/agents/` | 19 analyst agents (personality + quant) plus risk manager and portfolio manager |
+| `src/agents/` | 25 analyst agents (personality + quant) plus risk manager and portfolio manager |
 | `src/backtesting/` | Backtesting engine, portfolio, metrics, CLI |
 | `src/broker/` | `Broker` protocol + Alpaca client |
 | `src/live/` | Live executor, runner, risk gate, audit journal |
 | `src/data/` | Disk-persisted cache, Pydantic data models |
 | `src/llm/` | Multi-provider LLM dispatch, OpenRouter catalog |
+| `src/utils/` | Analyst registry (`ANALYST_CONFIG`), shared helpers |
 | `src/config.py` | Centralised env-var config via pydantic-settings |
 | `tests/` | Unit and integration tests |
 
@@ -128,6 +151,8 @@ uv run pytest
 
 1. Create `src/agents/my_analyst.py` with a `my_analyst_agent(state, agent_id)` function.
 2. Register it in `src/utils/analysts.py` — add an entry to `ANALYST_CONFIG`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines and [ARCHITECTURE.md](ARCHITECTURE.md) for system design.
 
 ## Python version
 

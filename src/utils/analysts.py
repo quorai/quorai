@@ -309,6 +309,7 @@ STRATEGY_GROUP_INFO: dict[str, dict[str, str]] = {
 
 # Derive ANALYST_ORDER from ANALYST_CONFIG for backwards compatibility
 ANALYST_ORDER = [(config["display_name"], key) for key, config in sorted(ANALYST_CONFIG.items(), key=lambda x: x[1]["order"])]
+ALL_ANALYST_KEYS: list[str] = [key for _, key in ANALYST_ORDER]
 
 
 def get_analyst_nodes():

@@ -10,7 +10,7 @@ from dateutil.relativedelta import relativedelta
 import questionary
 
 from src.llm.models import AVAILABLE_MODELS, LLM_ORDER, find_model_by_name, get_model_info
-from src.utils.analysts import ANALYST_ORDER
+from src.utils.analysts import ALL_ANALYST_KEYS, ANALYST_ORDER
 
 _NY = ZoneInfo("America/New_York")
 
@@ -66,12 +66,12 @@ def add_date_args(parser: argparse.ArgumentParser, *, default_months_back: int |
 def parse_tickers(tickers_arg: str | None) -> list[str]:
     if not tickers_arg:
         return []
-    return [ticker.strip() for ticker in tickers_arg.split(",") if ticker.strip()]
+    return [ticker.strip().upper() for ticker in tickers_arg.split(",") if ticker.strip()]
 
 
 def select_analysts(flags: dict | None = None) -> list[str]:
     if flags and flags.get("analysts_all"):
-        return [a[1] for a in ANALYST_ORDER]
+        return ALL_ANALYST_KEYS
 
     if flags and flags.get("analysts"):
         return [a.strip() for a in flags["analysts"].split(",") if a.strip()]

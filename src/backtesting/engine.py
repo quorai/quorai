@@ -47,6 +47,7 @@ class BacktestEngine:
         selected_analysts: list[str] | None,
         initial_margin_requirement: float,
         llm_temperature: float | None = None,
+        show_reasoning: bool = False,
     ) -> None:
         self._agent = agent
         self._tickers = tickers
@@ -57,6 +58,7 @@ class BacktestEngine:
         self._model_provider = model_provider
         self._selected_analysts = selected_analysts
         self._llm_temperature = llm_temperature
+        self._show_reasoning = show_reasoning
 
         self._portfolio = Portfolio(
             tickers=tickers,
@@ -163,6 +165,7 @@ class BacktestEngine:
                 model_provider=self._model_provider,
                 selected_analysts=self._selected_analysts,
                 llm_temperature=self._llm_temperature,
+                show_reasoning=self._show_reasoning,
             )
             decisions = agent_output["decisions"]
 
