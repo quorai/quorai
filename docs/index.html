@@ -3,11 +3,44 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Quorai — Agent Gallery &amp; Trading Flow</title>
+    <title>Quorai — Multi-Agent AI Trading System</title>
     <meta
       name="description"
-      content="A quorum of AI agents deliberating trading decisions. Browse all 25 analyst personas and explore the trading flow diagram."
+      content="Open-source multi-agent AI trading system built on LangGraph. 25 LLM analyst agents (Buffett, Dalio, Simons and more) deliberate via a portfolio manager. Supports backtesting and live paper trading via Alpaca."
     />
+    <link rel="canonical" href="https://nils-fl.github.io/quorai/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://nils-fl.github.io/quorai/" />
+    <meta property="og:title" content="Quorai — Multi-Agent AI Trading System" />
+    <meta property="og:description" content="Open-source multi-agent AI trading system built on LangGraph. 25 LLM analyst agents (Buffett, Dalio, Simons and more) deliberate via a portfolio manager. Supports backtesting and live paper trading via Alpaca." />
+    <meta property="og:image" content="https://nils-fl.github.io/quorai/assets/logo-detailed.jpeg" />
+    <meta property="og:site_name" content="Quorai" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Quorai — Multi-Agent AI Trading System" />
+    <meta name="twitter:description" content="Open-source multi-agent AI trading system built on LangGraph. 25 LLM analyst agents deliberate via a portfolio manager. Backtesting + live paper trading via Alpaca." />
+    <meta name="twitter:image" content="https://nils-fl.github.io/quorai/assets/logo-detailed.jpeg" />
+
+    <!-- Structured data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Quorai",
+      "description": "Open-source multi-agent AI trading system built on LangGraph. 25 LLM analyst agents deliberate via a portfolio manager. Supports backtesting and live paper trading via Alpaca.",
+      "url": "https://nils-fl.github.io/quorai/",
+      "codeRepository": "https://github.com/nils-fl/quorai",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "Linux, macOS, Windows",
+      "programmingLanguage": "Python",
+      "license": "https://opensource.org/licenses/MIT",
+      "keywords": "ai agents, multi-agent, langgraph, langchain, trading, backtesting, algorithmic trading, llm, portfolio management"
+    }
+    </script>
+
     <link rel="stylesheet" href="style.css" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   </head>
@@ -19,7 +52,8 @@
         alt="Quorai logo"
       />
       <p class="hero__tagline">
-        <strong>quorai</strong> — a quorum of AI agents deliberating trading decisions.
+        <strong>quorai</strong> — a multi-agent AI trading system built on LangGraph.
+        25 LLM analyst agents deliberate and vote on trading decisions through a portfolio manager.
       </p>
       <p class="hero__disclaimer">
         ⚠️ Educational &amp; research use only. Not investment advice.

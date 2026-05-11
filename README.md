@@ -6,22 +6,48 @@
 
 *A quorum of AI agents deliberating trading decisions. Pronounced "KWOR-eye" (quorum + AI).*
 
-A proof of concept for a multi-agent AI trading system. For **educational purposes only** — not intended for real trading or investment.
-
 **[GitHub](https://github.com/nils-fl/quorai)** · **[About](https://nils-fl.github.io/quorai/)**
 
-The system runs multiple analyst agents (value, growth, macro, technical, fundamentals, sentiment, risk) that collaborate through a portfolio manager to produce trading decisions.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.2-green)](https://github.com/langchain-ai/langgraph)
 
-## Disclaimer
+A multi-agent AI trading system where specialized LLM analyst agents deliberate and vote on trading decisions through a portfolio manager. Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](https://github.com/langchain-ai/langchain). For **educational purposes only** — not intended for real trading or investment.
 
-This project is for **educational and research purposes only**.
+## Features
 
-- Not intended for real trading or investment
-- No investment advice or guarantees provided
-- Creator assumes no liability for financial losses
-- Past performance does not indicate future results
+- **25 analyst agents** — value, growth, macro, technical, fundamentals, sentiment, risk, and more
+- **Famous investor personas** — simulations of Buffett, Munger, Ackman, Burry, Wood, Dalio, Simons, Lynch, and others
+- **Multi-provider LLM support** — OpenAI, Anthropic, Groq, Gemini, DeepSeek, xAI, OpenRouter
+- **Backtesting engine** — replay historical data with full agent deliberation and portfolio metrics
+- **Live / paper trading** — execute via Alpaca with optional Telegram approval gate
+- **Bull/bear debate node** — agents argue opposing sides before the portfolio manager decides
 
-The agent modules named after real investors (Buffett, Munger, Ackman, Burry, Wood, Asness, Dalio, Marks, Simons, Druckenmiller, Seykota, Greenblatt, Damodaran, Fisher, Lynch, Jhunjhunwala, Pabrai, Taleb, and others) are **educational simulations** that approximate publicly stated investment philosophies derived from books, interviews, and public writings. They are not affiliated with, endorsed by, or representative of the actual individuals or their organisations.
+## How it works
+
+```
+Market Data → Analyst Agents → Portfolio Manager → Order Execution
+                  ↑                   ↑
+           (LangGraph nodes)   (deliberation graph)
+```
+
+Each trading cycle:
+1. Financial data is fetched (price, fundamentals, news, macro indicators)
+2. Each analyst agent runs as a LangGraph node and produces a signal with reasoning
+3. A portfolio manager agent weighs the signals and issues buy/hold/sell orders
+4. Orders are executed via Alpaca (live) or simulated (backtest)
+
+## Analyst roster
+
+| Category | Agents |
+|---|---|
+| Value | Buffett, Munger, Ackman, Burry, Greenblatt, Pabrai, Damodaran |
+| Growth | Cathie Wood, Phil Fisher, Peter Lynch, Jhunjhunwala |
+| Macro | Dalio, Druckenmiller, Marks |
+| Quant | Simons, Asness, Seykota |
+| Sentiment | News sentiment, social sentiment |
+| Risk | Risk manager, Taleb (tail-risk) |
+| Special | Bull/bear debate node |
 
 ## Setup
 
@@ -202,6 +228,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines and [ARC
 ## Python version
 
 Python 3.12 recommended; 3.11 supported.
+
+## Disclaimer
+
+This project is for **educational and research purposes only**.
+
+- Not intended for real trading or investment
+- No investment advice or guarantees provided
+- Creator assumes no liability for financial losses
+- Past performance does not indicate future results
+
+The agent modules named after real investors (Buffett, Munger, Ackman, Burry, Wood, Asness, Dalio, Marks, Simons, Druckenmiller, Seykota, Greenblatt, Damodaran, Fisher, Lynch, Jhunjhunwala, Pabrai, Taleb, and others) are **educational simulations** that approximate publicly stated investment philosophies derived from books, interviews, and public writings. They are not affiliated with, endorsed by, or representative of the actual individuals or their organisations.
 
 ## Acknowledgements
 
