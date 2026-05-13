@@ -102,6 +102,7 @@ def build_flow() -> None:
     flow = {
         "stages": {
             "input": {"label": "Tickers + Portfolio"},
+            "preflight": {"label": "Preflight", "note": "Regime classifier + conviction weights"},
             "debate": {"label": "Debate Node", "note": "LLM moderates contested tickers"},
             "risk": {"label": "Risk Management", "note": "Volatility & correlation limits"},
             "pm": {"label": "Portfolio Manager", "note": "Final action per ticker"},
