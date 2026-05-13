@@ -127,31 +127,42 @@
               <li>
                 <span class="step-num">1</span>
                 <div>
-                  <strong>Analyst agents</strong> — 25+ agents, each with a distinct investing
-                  persona and prompt, independently analyse each ticker using price history,
-                  fundamentals, insider trades, and news.
+                  <strong>Preflight</strong> — each trading day, the pipeline optionally
+                  classifies the current SPY market regime (bull / bear / risk-off / neutral)
+                  and loads per-agent conviction weights built from prior labeled runs.
                 </div>
               </li>
               <li>
                 <span class="step-num">2</span>
                 <div>
-                  <strong>Debate node</strong> — when agents disagree on a ticker, an LLM
-                  moderator synthesises the conflicting views and produces a reconciled signal.
+                  <strong>Analyst agents</strong> — 25 personas independently analyse each
+                  ticker using price history, fundamentals, insider trades, and news. When
+                  regime selection is active, only the strategy groups relevant to the current
+                  regime run (e.g. risk-off → macro, deep value, sentiment only).
                 </div>
               </li>
               <li>
                 <span class="step-num">3</span>
+                <div>
+                  <strong>Debate node</strong> — agent votes are aggregated into group
+                  consensus signals. When conviction weights are loaded, each analyst's vote
+                  is scaled by their rolling directional hit-rate before the group sum.
+                </div>
+              </li>
+              <li>
+                <span class="step-num">4</span>
                 <div>
                   <strong>Risk manager</strong> — pure maths: volatility- and
                   correlation-adjusted position limits are computed without an LLM call.
                 </div>
               </li>
               <li>
-                <span class="step-num">4</span>
+                <span class="step-num">5</span>
                 <div>
-                  <strong>Portfolio manager</strong> — aggregates all signals and risk limits,
-                  then calls an LLM to emit a final <em>buy / sell / hold</em> decision with
-                  sizing and reasoning for each ticker.
+                  <strong>Portfolio manager</strong> — LLM emits a final
+                  <em>buy / sell / hold</em> decision with sizing and reasoning. Per-agent
+                  signals are written to a JSONL log that feeds back into the next run's
+                  conviction weights via the forward-return labeler.
                 </div>
               </li>
             </ol>
@@ -192,11 +203,15 @@
             <div class="about-modes">
               <div class="about-mode">
                 <div class="about-mode__label">CLI</div>
-                <code class="about-code">uv run python src/main.py --ticker AAPL,MSFT</code>
+                <code class="about-code">uv run python src/main.py --tickers AAPL,MSFT</code>
               </div>
               <div class="about-mode">
                 <div class="about-mode__label">Backtest</div>
-                <code class="about-code">uv run python run_backtest.py</code>
+                <code class="about-code">uv run python -m src.backtesting --tickers AAPL,MSFT --model deepseek/deepseek-chat --model-provider OpenRouter</code>
+              </div>
+              <div class="about-mode">
+                <div class="about-mode__label">A/B compare</div>
+                <code class="about-code">uv run python -m src.backtesting compare --mode both --tickers AAPL,MSFT --model deepseek/deepseek-chat --model-provider OpenRouter</code>
               </div>
             </div>
             <p class="about-note">

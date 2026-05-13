@@ -175,6 +175,8 @@ OpenAI, OpenRouter, xAI. The catalog is loaded from `src/llm/api_models.json`.
 `get_model()` (`src/llm/models.py:122`) returns the appropriate LangChain chat client.
 OpenRouter and Kimi reuse `ChatOpenAI` with a custom `base_url`.
 
+`src/llm/request.py:RunRequest` is a dataclass that carries per-run overrides through the agent graph via `state["metadata"]["request"]`. It holds two things: `api_keys` (dict of provider → key, used to hot-swap keys without touching `.env`) and `agent_models` (dict of `agent_id` → `(model_name, provider)` tuples, populated from `--agent-model AGENT=model/PROVIDER` CLI flags or the `QUORAI_AGENT_MODELS_JSON` env var). `RunRequest.get_agent_model_config(agent_name)` resolves a per-agent override or falls back to the wildcard `"*"` entry. `BacktestEngine` and `LiveRunner` both construct a `RunRequest` during preflight and inject it into initial graph state.
+
 `src/utils/llm.py:call_llm()` is the structured-output helper:
 - Uses `.with_structured_output(pydantic_model, method="json_mode")` for JSON-mode-capable models.
 - For DeepSeek/Gemini, falls back to `extract_json_from_response()` (parses a `` ```json `` block).
@@ -287,6 +289,16 @@ into a `token_usage` dict that is returned as part of each day's result.
 `BacktestEngine` aggregates token totals across the full run and exposes them in the final metrics
 dict (`get_metrics()`) under key `"token_usage"`.
 
+`src/utils/llm.py:_attach_cache_control()` (line 84) injects `cache_control: {"type": "ephemeral"}` onto the system-prompt block for Anthropic-routed models before each invocation. Cache activity is captured in `TokenCapture` alongside standard counts: `cache_read_input_tokens` (tokens served from cache) and `cache_creation_input_tokens` (tokens written to cache) are stored as `cache_read_tokens` / `cache_creation_tokens` on `AgentOutput` and accumulated into the `token_usage` summary dict.
+
+---
+
+### Per-ticker parallelism
+
+`src/utils/concurrency.py:parallel_per_ticker()` accepts a list of ticker keys and a callable, and executes them concurrently using a `ThreadPoolExecutor`. The pool size is read from the `QUORAI_PARALLEL_TICKERS` environment variable (integer, default 1 — i.e. sequential). Setting it to a value greater than 1 is useful when running against many tickers and the bottleneck is LLM latency rather than CPU.
+
+Both `BacktestEngine` (one `run_quorai` call per ticker per day) and `LiveRunner` can use this to parallelise the per-ticker graph invocations within a single trading cycle.
+
 ---
 
 ### Comparison harness
@@ -360,7 +372,7 @@ Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
 
 | Mode | How |
 |---|---|
-| CLI | `uv run python src/main.py --ticker AAPL,MSFT` |
+| CLI | `uv run python src/main.py --tickers AAPL,MSFT` |
 | Backtest | `uv run python -m src.backtesting --tickers AAPL,MSFT --model <model>` |
 | GitHub Pages | Static site at `docs/` — three tabs: Agents gallery, Trading Flow diagram, About |
 | Docker | Planned — not yet present in the repository |

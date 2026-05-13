@@ -54,6 +54,7 @@ function buildMermaidSpec(flowData) {
   const lines = ["flowchart LR"];
 
   lines.push(`    input(["${stages.input.label}"])`);
+  lines.push(`    preflight["${stages.preflight.label}\\n${stages.preflight.note}"]`);
 
   lines.push("    subgraph analysts[\" \"]");
   for (const g of groups) {
@@ -67,7 +68,8 @@ function buildMermaidSpec(flowData) {
   lines.push(`    decision(["${stages.decision.label}"])`);
 
   const groupKeys = groups.map((g) => g.key).join(" & ");
-  lines.push(`    input --> ${groupKeys}`);
+  lines.push(`    input --> preflight`);
+  lines.push(`    preflight --> ${groupKeys}`);
   lines.push(`    ${groupKeys} --> debate`);
   lines.push("    debate --> risk --> pm --> decision");
 

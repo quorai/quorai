@@ -3,6 +3,10 @@
     "input": {
       "label": "Tickers + Portfolio"
     },
+    "preflight": {
+      "label": "Preflight",
+      "note": "Regime classifier + conviction weights"
+    },
     "debate": {
       "label": "Debate Node",
       "note": "LLM moderates contested tickers"
