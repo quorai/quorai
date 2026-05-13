@@ -67,9 +67,13 @@ AnalystSignal = Dict[str, Any]
 AgentSignals = Dict[str, Dict[str, AnalystSignal]]
 
 
-class AgentOutput(TypedDict):
+class _AgentOutputRequired(TypedDict):
     decisions: AgentDecisions
     analyst_signals: AgentSignals
+
+
+class AgentOutput(_AgentOutputRequired, total=False):
+    token_usage: list[dict]  # per-call records from get_token_log()
 
 
 # Use functional style to allow keys with spaces to mirror current code
@@ -91,7 +95,7 @@ PortfolioValuePoint = TypedDict(
 class PerformanceMetrics(TypedDict, total=False):
     """Performance metrics computed over the equity curve.
 
-    Keys are aligned with the current implementation in src/backtester.py.
+    Keys are aligned with the current implementation in src/backtesting/engine.py.
     Values are optional to support progressive calculation over time.
     """
 

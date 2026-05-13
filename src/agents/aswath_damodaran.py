@@ -5,18 +5,23 @@ from __future__ import annotations
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class AswathDamodaranSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Aswath Damodaran, Professor of Finance at NYU Stern.\n"
+    "Use your valuation framework to issue trading signals on US equities.\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Damodaran\'s clear, data-driven tone — one concrete valuation driver, metric, or judgment per bullet. No prose paragraphs.\n'
+    "Return ONLY the JSON specified below."
+)
 
 
 def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_agent"):
@@ -33,10 +38,7 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
 
-    analysis_data: dict[str, dict] = {}
-    damodaran_signals: dict[str, dict] = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         # ─── Fetch core data ────────────────────────────────────────────────────
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
@@ -88,7 +90,7 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_score,
@@ -104,19 +106,20 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
         progress.update_status(agent_id, ticker, "Generating Damodaran analysis")
         damodaran_output = generate_damodaran_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        damodaran_signals[ticker] = damodaran_output.model_dump()
-
         progress.update_status(agent_id, ticker, "Done", analysis=damodaran_output.reasoning)
+        return damodaran_output.model_dump()
+
+    damodaran_signals = parallel_per_ticker(tickers, _analyze)
 
     # ─── Push message back to graph state ──────────────────────────────────────
     message = HumanMessage(content=json.dumps(damodaran_signals), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(damodaran_signals, "Aswath Damodaran Agent")
 
     state["data"]["analyst_signals"][agent_id] = damodaran_signals
@@ -346,56 +349,25 @@ def generate_damodaran_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> AswathDamodaranSignal:
+) -> BaseSignal:
     """
     Ask the LLM to channel Prof. Damodaran's analytical style:
       • Story → Numbers → Value narrative
       • Emphasize risk, growth, and cash-flow assumptions
       • Cite cost of capital, implied MOS, and valuation cross-checks
     """
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are Aswath Damodaran, Professor of Finance at NYU Stern.
-                Use your valuation framework to issue trading signals on US equities.
-
-                Speak with your usual clear, data-driven tone:
-                  ◦ Start with the company "story" (qualitatively)
-                  ◦ Connect that story to key numerical drivers: revenue growth, margins, reinvestment, risk
-                  ◦ Conclude with value: your FCFF DCF estimate, margin of safety, and relative valuation sanity checks
-                  ◦ Highlight major uncertainties and how they affect value
-                Return ONLY the JSON specified below.""",
-            ),
-            (
-                "human",
-                """Ticker: {ticker}
-
-                Analysis data:
-                {analysis_data}
-
-                Respond EXACTLY in this JSON schema:
-                {{
-                  "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": float (0-100),
-                  "reasoning": "string"
-                }}""",
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
     def default_signal():
-        return AswathDamodaranSignal(
+        return BaseSignal(
             signal="neutral",
-            confidence=0.0,
+            confidence=0,
             reasoning="Parsing error; defaulting to neutral",
         )
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=AswathDamodaranSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=default_signal,

@@ -4,18 +4,35 @@ import json
 import statistics
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class StanleyDruckenmillerSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Stanley Druckenmiller. You are a top-down macro investor who sizes into equities based on the macro regime, not bottoms-up fundamentals. Apply your framework:\n"
+    "\n"
+    "1. Macro regime first: what are rates, credit spreads, and the USD doing? Rising rates + strong USD = headwind for equities, especially growth/tech. Easing cycle + weak USD = tailwind.\n"
+    "2. Liquidity is everything: you follow central bank liquidity closely. Tightening liquidity = reduce risk; expanding liquidity = go long aggressively.\n"
+    "3. Sector / factor rotation driven by macro: rising rates → value and energy; easing → growth and EM; stagflation → commodities.\n"
+    "4. Earnings growth and momentum confirm or contradict the macro: in a risk-on macro environment, strong earnings + momentum amplify the thesis.\n"
+    "5. Asymmetric conviction: when the macro is clear and you have conviction, you size very large. You are NOT a diversifier.\n"
+    "6. Cut losses instantly when the macro thesis changes — Druckenmiller is famous for reversing positions quickly.\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Druckenmiller\'s direct, macro-driven, high-conviction voice — one concrete macro read, metric, or judgment per bullet. No prose paragraphs.\n'
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: macro regime tailwind + strong revenue/earnings growth + low leverage + momentum confirming\n"
+    "- Bearish: macro headwind (tightening, high rates) OR deteriorating fundamentals that would lose money even in a good macro\n"
+    "- Neutral: macro regime is unclear or the company's profile is orthogonal to macro drivers\n"
+    "\n"
+    "Return signal: bullish, neutral, or bearish with 0-100 confidence."
+)
 
 
 def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druckenmiller_agent"):
@@ -33,10 +50,8 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    analysis_data = {}
-    druck_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -101,7 +116,7 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_possible_score,
@@ -115,18 +130,19 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
         progress.update_status(agent_id, ticker, "Generating Stanley Druckenmiller analysis")
         druck_output = generate_druckenmiller_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        druck_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=druck_output.reasoning)
+        return {
             "signal": druck_output.signal,
             "confidence": druck_output.confidence,
             "reasoning": druck_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=druck_output.reasoning)
+    druck_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Wrap results in a single message
     message = HumanMessage(content=json.dumps(druck_analysis), name=agent_id)
@@ -509,64 +525,19 @@ def generate_druckenmiller_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> StanleyDruckenmillerSignal:
+) -> BaseSignal:
     """
     Generates a JSON signal in the style of Stanley Druckenmiller.
     """
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are Stanley Druckenmiller. You are a top-down macro investor who sizes into equities based on the macro regime, not bottoms-up fundamentals. Apply your framework:
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-              1. Macro regime first: what are rates, credit spreads, and the USD doing? Rising rates + strong USD = headwind for equities, especially growth/tech. Easing cycle + weak USD = tailwind.
-              2. Liquidity is everything: you follow central bank liquidity closely. Tightening liquidity = reduce risk; expanding liquidity = go long aggressively.
-              3. Sector / factor rotation driven by macro: rising rates → value and energy; easing → growth and EM; stagflation → commodities.
-              4. Earnings growth and momentum confirm or contradict the macro: in a risk-on macro environment, strong earnings + momentum amplify the thesis.
-              5. Asymmetric conviction: when the macro is clear and you have conviction, you size very large. You are NOT a diversifier.
-              6. Cut losses instantly when the macro thesis changes — Druckenmiller is famous for reversing positions quickly.
-
-              In your reasoning:
-              - Lead with the macro read: what regime is this stock in (expansion, contraction, stagflation, recovery)?
-              - Is the company's revenue / earnings profile aligned or counter to that macro regime?
-              - What is the asymmetric risk/reward given the macro backdrop?
-              - Use Druckenmiller's direct, macro-driven, high-conviction voice.
-
-              Signal rules:
-              - Bullish: macro regime tailwind + strong revenue/earnings growth + low leverage + momentum confirming
-              - Bearish: macro headwind (tightening, high rates) OR deteriorating fundamentals that would lose money even in a good macro
-              - Neutral: macro regime is unclear or the company's profile is orthogonal to macro drivers
-
-              Return signal: bullish, neutral, or bearish with 0-100 confidence.
-              """,
-            ),
-            (
-                "human",
-                """Based on the following analysis, create a Druckenmiller-style investment signal.
-
-              Analysis Data for {ticker}:
-              {analysis_data}
-
-              Return the trading signal in this JSON format:
-              {{
-                "signal": "bullish/bearish/neutral",
-                "confidence": float (0-100),
-                "reasoning": "string"
-              }}
-              """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    def create_default_signal():
-        return StanleyDruckenmillerSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis, defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=StanleyDruckenmillerSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_signal,
+        default_factory=_default,
     )

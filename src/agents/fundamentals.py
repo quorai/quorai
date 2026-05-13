@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import get_financial_metrics
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.progress import progress
 
 
@@ -15,13 +16,10 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    # Initialize fundamental analysis for each ticker
-    fundamental_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict | None:
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
 
-        # Get the financial metrics
         financial_metrics = get_financial_metrics(
             ticker=ticker,
             end_date=end_date,
@@ -32,25 +30,21 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
 
         if not financial_metrics:
             progress.update_status(agent_id, ticker, "Failed: No financial metrics found")
-            continue
+            return None
 
-        # Pull the most recent financial metrics
         metrics = financial_metrics[0]
-
-        # Initialize signals list for different fundamental aspects
         signals = []
         reasoning = {}
 
         progress.update_status(agent_id, ticker, "Analyzing profitability")
-        # 1. Profitability Analysis
         return_on_equity = metrics.return_on_equity
         net_margin = metrics.net_margin
         operating_margin = metrics.operating_margin
 
         thresholds = [
-            (return_on_equity, 0.15),  # Strong ROE above 15%
-            (net_margin, 0.20),  # Healthy profit margins
-            (operating_margin, 0.15),  # Strong operating efficiency
+            (return_on_equity, 0.15),
+            (net_margin, 0.20),
+            (operating_margin, 0.15),
         ]
         profitability_score = sum(metric is not None and metric > threshold for metric, threshold in thresholds)
 
@@ -61,15 +55,14 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
         }
 
         progress.update_status(agent_id, ticker, "Analyzing growth")
-        # 2. Growth Analysis
         revenue_growth = metrics.revenue_growth
         earnings_growth = metrics.earnings_growth
         book_value_growth = metrics.book_value_growth
 
         thresholds = [
-            (revenue_growth, 0.10),  # 10% revenue growth
-            (earnings_growth, 0.10),  # 10% earnings growth
-            (book_value_growth, 0.10),  # 10% book value growth
+            (revenue_growth, 0.10),
+            (earnings_growth, 0.10),
+            (book_value_growth, 0.10),
         ]
         growth_score = sum(metric is not None and metric > threshold for metric, threshold in thresholds)
 
@@ -80,18 +73,17 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
         }
 
         progress.update_status(agent_id, ticker, "Analyzing financial health")
-        # 3. Financial Health
         current_ratio = metrics.current_ratio
         debt_to_equity = metrics.debt_to_equity
         free_cash_flow_per_share = metrics.free_cash_flow_per_share
         earnings_per_share = metrics.earnings_per_share
 
         health_score = 0
-        if current_ratio and current_ratio > 1.5:  # Strong liquidity
+        if current_ratio and current_ratio > 1.5:
             health_score += 1
-        if debt_to_equity and debt_to_equity < 0.5:  # Conservative debt levels
+        if debt_to_equity and debt_to_equity < 0.5:
             health_score += 1
-        if free_cash_flow_per_share and earnings_per_share and free_cash_flow_per_share > earnings_per_share * 0.8:  # Strong FCF conversion
+        if free_cash_flow_per_share and earnings_per_share and free_cash_flow_per_share > earnings_per_share * 0.8:
             health_score += 1
 
         signals.append("bullish" if health_score >= 2 else "bearish" if health_score == 0 else "neutral")
@@ -101,15 +93,14 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
         }
 
         progress.update_status(agent_id, ticker, "Analyzing valuation ratios")
-        # 4. Price to X ratios
         pe_ratio = metrics.price_to_earnings_ratio
         pb_ratio = metrics.price_to_book_ratio
         ps_ratio = metrics.price_to_sales_ratio
 
         thresholds = [
-            (pe_ratio, 25),  # Reasonable P/E ratio
-            (pb_ratio, 3),  # Reasonable P/B ratio
-            (ps_ratio, 5),  # Reasonable P/S ratio
+            (pe_ratio, 25),
+            (pb_ratio, 3),
+            (ps_ratio, 5),
         ]
         price_ratio_score = sum(metric is not None and metric > threshold for metric, threshold in thresholds)
 
@@ -120,37 +111,35 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
         }
 
         progress.update_status(agent_id, ticker, "Calculating final signal")
-        # Determine overall signal
-        bullish_signals = signals.count("bullish")
-        bearish_signals = signals.count("bearish")
+        bullish_count = signals.count("bullish")
+        bearish_count = signals.count("bearish")
 
-        if bullish_signals > bearish_signals:
+        if bullish_count > bearish_count:
             overall_signal = "bullish"
-        elif bearish_signals > bullish_signals:
+        elif bearish_count > bullish_count:
             overall_signal = "bearish"
         else:
             overall_signal = "neutral"
 
-        # Calculate confidence level
         total_signals = len(signals)
-        confidence = round(max(bullish_signals, bearish_signals) / total_signals, 2) * 100
+        confidence = round(max(bullish_count, bearish_count) / total_signals, 2) * 100
 
-        fundamental_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        return {
             "signal": overall_signal,
             "confidence": confidence,
             "reasoning": reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+    raw = parallel_per_ticker(tickers, _analyze)
+    fundamental_analysis = {k: v for k, v in raw.items() if v is not None}
 
-    # Create the fundamental analysis message
     message = HumanMessage(
         content=json.dumps(fundamental_analysis),
         name=agent_id,
     )
 
-    # Print the reasoning if the flag is set
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(fundamental_analysis, "Fundamental Analysis Agent")
 
     # Add the signal to the analyst_signals list

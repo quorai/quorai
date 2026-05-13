@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from src.agents._data_bundle import AgentDataBundle
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.progress import progress
 
 
@@ -24,9 +25,8 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    valuation_analysis: dict[str, dict] = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict | None:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -54,25 +54,21 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
         financial_metrics = bundle.financial_metrics
         if not financial_metrics:
             progress.update_status(agent_id, ticker, "Failed: No financial metrics found")
-            continue
+            return None
         most_recent_metrics = financial_metrics[0]
 
         line_items = bundle.line_items
         if not line_items:
             progress.update_status(agent_id, ticker, "Failed: No financial line items found")
-            continue
+            return None
         li_curr = line_items[0]
         li_prev = line_items[1] if len(line_items) >= 2 else None
 
-        # ------------------------------------------------------------------
-        # Valuation models
-        # ------------------------------------------------------------------
         if li_prev is not None and li_curr.working_capital is not None and li_prev.working_capital is not None:
             wc_change = li_curr.working_capital - li_prev.working_capital
         else:
             wc_change = 0
 
-        # Owner Earnings
         owner_val = calculate_owner_earnings_value(
             net_income=li_curr.net_income,
             depreciation=li_curr.depreciation_and_amortization,
@@ -81,10 +77,8 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             growth_rate=most_recent_metrics.earnings_growth or 0.05,
         )
 
-        # Enhanced Discounted Cash Flow with WACC and scenarios
         progress.update_status(agent_id, ticker, "Calculating WACC and enhanced DCF")
 
-        # Calculate WACC
         wacc = calculate_wacc(
             market_cap=most_recent_metrics.market_cap or 0,
             total_debt=getattr(li_curr, "total_debt", None),
@@ -93,13 +87,8 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             debt_to_equity=most_recent_metrics.debt_to_equity,
         )
 
-        # Prepare FCF history for enhanced DCF
-        fcf_history = []
-        for li in line_items:
-            if hasattr(li, "free_cash_flow") and li.free_cash_flow is not None:
-                fcf_history.append(li.free_cash_flow)
+        fcf_history = [li.free_cash_flow for li in line_items if hasattr(li, "free_cash_flow") and li.free_cash_flow is not None]
 
-        # Enhanced DCF with scenarios
         dcf_results = calculate_dcf_scenarios(
             fcf_history=fcf_history,
             growth_metrics={"revenue_growth": most_recent_metrics.revenue_growth, "fcf_growth": most_recent_metrics.free_cash_flow_growth, "earnings_growth": most_recent_metrics.earnings_growth},
@@ -109,11 +98,7 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
         )
 
         dcf_val = dcf_results["expected_value"]
-
-        # Implied Equity Value
         ev_ebitda_val = calculate_ev_ebitda_value(financial_metrics)
-
-        # Residual Income Model
         rim_val = calculate_residual_income_value(
             market_cap=most_recent_metrics.market_cap,
             net_income=li_curr.net_income,
@@ -121,13 +106,10 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             book_value_growth=most_recent_metrics.book_value_growth or 0.03,
         )
 
-        # ------------------------------------------------------------------
-        # Aggregate & signal
-        # ------------------------------------------------------------------
         market_cap = bundle.market_cap
         if not market_cap:
             progress.update_status(agent_id, ticker, "Failed: Market cap unavailable")
-            continue
+            return None
 
         method_values = {
             "dcf": {"value": dcf_val, "weight": 0.35},
@@ -139,7 +121,7 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
         total_weight = sum(v["weight"] for v in method_values.values() if v["value"] > 0)
         if total_weight == 0:
             progress.update_status(agent_id, ticker, "Failed: All valuation methods zero")
-            continue
+            return None
 
         for v in method_values.values():
             v["gap"] = (v["value"] - market_cap) / market_cap if v["value"] > 0 else None
@@ -149,35 +131,38 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
         signal = "bullish" if weighted_gap > 0.15 else "bearish" if weighted_gap < -0.15 else "neutral"
         confidence = round(min(abs(weighted_gap) / 0.30 * 100, 100))
 
-        # Enhanced reasoning with DCF scenario details
-        reasoning = {}
+        reasoning: dict = {}
         for m, vals in method_values.items():
             if vals["value"] > 0:
                 base_details = f"Value: ${vals['value']:,.2f}, Market Cap: ${market_cap:,.2f}, Gap: {vals['gap']:.1%}, Weight: {vals['weight'] * 100:.0f}%"
-
-                # Add enhanced DCF details
-                if m == "dcf" and "dcf_results" in locals():
-                    enhanced_details = f"{base_details}\n  WACC: {wacc:.1%}, Bear: ${dcf_results['downside']:,.2f}, Bull: ${dcf_results['upside']:,.2f}, Range: ${dcf_results['range']:,.2f}"
-                else:
-                    enhanced_details = base_details
-
+                enhanced_details = (
+                    f"{base_details}\n  WACC: {wacc:.1%}, Bear: ${dcf_results['downside']:,.2f}, Bull: ${dcf_results['upside']:,.2f}, Range: ${dcf_results['range']:,.2f}"
+                    if m == "dcf"
+                    else base_details
+                )
                 reasoning[f"{m}_analysis"] = {
                     "signal": ("bullish" if vals["gap"] and vals["gap"] > 0.15 else "bearish" if vals["gap"] and vals["gap"] < -0.15 else "neutral"),
                     "details": enhanced_details,
                 }
 
-        # Add overall DCF scenario summary if available
-        if "dcf_results" in locals():
-            reasoning["dcf_scenario_analysis"] = {"bear_case": f"${dcf_results['downside']:,.2f}", "base_case": f"${dcf_results['scenarios']['base']:,.2f}", "bull_case": f"${dcf_results['upside']:,.2f}", "wacc_used": f"{wacc:.1%}", "fcf_periods_analyzed": len(fcf_history)}
+        reasoning["dcf_scenario_analysis"] = {
+            "bear_case": f"${dcf_results['downside']:,.2f}",
+            "base_case": f"${dcf_results['scenarios']['base']:,.2f}",
+            "bull_case": f"${dcf_results['upside']:,.2f}",
+            "wacc_used": f"{wacc:.1%}",
+            "fcf_periods_analyzed": len(fcf_history),
+        }
 
-        valuation_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        return {
             "signal": signal,
             "confidence": confidence,
             "reasoning": reasoning,
         }
-        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
 
-    # ---- Emit message (for LLM tool chain) ----
+    raw = parallel_per_ticker(tickers, _analyze)
+    valuation_analysis: dict[str, dict] = {k: v for k, v in raw.items() if v is not None}
+
     msg = HumanMessage(content=json.dumps(valuation_analysis), name=agent_id)
     if state["metadata"].get("show_reasoning") and valuation_analysis:
         show_agent_reasoning(valuation_analysis, "Valuation Analysis Agent")

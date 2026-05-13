@@ -1,5 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
+import os
 
 from colorama import init
 from dotenv import load_dotenv
@@ -13,7 +15,8 @@ from src.cli.input import (
     parse_cli_inputs,
 )
 from src.graph.state import AgentState
-from src.utils.analysts import get_analyst_nodes
+from src.llm.request import RunRequest
+from src.utils.analysts import ANALYST_CONFIG, get_analyst_nodes
 from src.utils.display import print_trading_output
 from src.utils.progress import progress
 
@@ -51,6 +54,8 @@ def run_quorai(
     model_name: str = "gpt-4.1",
     model_provider: str = "OpenAI",
     llm_temperature: float | None = None,
+    conviction_weights: dict[str, float] | None = None,
+    request: RunRequest | None = None,
 ):
     if selected_analysts is None:
         selected_analysts = []
@@ -58,11 +63,12 @@ def run_quorai(
     progress.start()
 
     try:
-        # Build workflow (default to all analysts when none provided)
-        workflow = create_workflow(
-            selected_analysts if selected_analysts else None,
-        )
+        workflow = create_workflow()
         agent = workflow.compile()
+
+        # selected_analysts is forwarded through metadata so parallel_analysts_node
+        # can resolve the analyst list at runtime without it being baked into the graph.
+        effective_analysts = selected_analysts if selected_analysts else list(ANALYST_CONFIG.keys())
 
         final_state = agent.invoke(
             {
@@ -83,6 +89,9 @@ def run_quorai(
                     "model_name": model_name,
                     "model_provider": model_provider,
                     "llm_temperature": llm_temperature,
+                    "conviction_weights": conviction_weights or {},
+                    "request": request,
+                    "selected_analysts": effective_analysts,
                 },
             },
         )
@@ -101,33 +110,46 @@ def start(state: AgentState):
     return state
 
 
-def create_workflow(selected_analysts=None):
-    """Create the workflow with selected analysts."""
+def parallel_analysts_node(state: AgentState) -> dict:
+    """Run all selected analyst agents, concurrently when QUORAI_PARALLEL_ANALYSTS > 1.
+
+    Reads selected_analysts from state["metadata"]["selected_analysts"]. Each analyst
+    function mutates state["data"]["analyst_signals"] in place (distinct keys per agent),
+    so concurrent writes are safe under the CPython GIL.
+    """
+    selected = state["metadata"].get("selected_analysts") or list(ANALYST_CONFIG.keys())
+    analyst_nodes_map = get_analyst_nodes()
+    max_workers = int(os.environ.get("QUORAI_PARALLEL_ANALYSTS", "1"))
+
+    funcs = [(key, analyst_nodes_map[key][1]) for key in selected if key in analyst_nodes_map]
+
+    if max_workers <= 1 or len(funcs) <= 1:
+        messages = []
+        for _, fn in funcs:
+            result = fn(state)
+            messages.extend(result.get("messages", []))
+    else:
+        effective_workers = min(max_workers, len(funcs))
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            futures = [executor.submit(fn, state) for _, fn in funcs]
+        messages = []
+        for fut in futures:
+            messages.extend(fut.result().get("messages", []))
+
+    return {"messages": messages, "data": state["data"]}
+
+
+def create_workflow():
+    """Create the workflow. Analyst selection is handled at runtime by parallel_analysts_node."""
     workflow = StateGraph(AgentState)
     workflow.add_node("start_node", start)
-
-    # Get analyst nodes from the configuration
-    analyst_nodes = get_analyst_nodes()
-
-    # Default to all analysts if none selected
-    if selected_analysts is None:
-        selected_analysts = list(analyst_nodes.keys())
-    # Add selected analyst nodes
-    for analyst_key in selected_analysts:
-        node_name, node_func = analyst_nodes[analyst_key]
-        workflow.add_node(node_name, node_func)
-        workflow.add_edge("start_node", node_name)
-
-    # Always add debate, risk and portfolio management
+    workflow.add_node("parallel_analysts_node", parallel_analysts_node)
     workflow.add_node("debate_node", debate_node)
     workflow.add_node("risk_management_agent", risk_management_agent)
     workflow.add_node("portfolio_manager", portfolio_management_agent)
 
-    # analysts → debate → risk → portfolio
-    for analyst_key in selected_analysts:
-        node_name = analyst_nodes[analyst_key][0]
-        workflow.add_edge(node_name, "debate_node")
-
+    workflow.add_edge("start_node", "parallel_analysts_node")
+    workflow.add_edge("parallel_analysts_node", "debate_node")
     workflow.add_edge("debate_node", "risk_management_agent")
     workflow.add_edge("risk_management_agent", "portfolio_manager")
     workflow.add_edge("portfolio_manager", END)

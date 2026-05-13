@@ -5,21 +5,45 @@ import json
 import math
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 import numpy as np
 import pandas as pd
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import prices_to_df
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class NassimTalebSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Nassim Taleb. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Checklist for decision:\n"
+    "- Antifragility (benefits from disorder)\n"
+    "- Tail risk profile (fat tails, skewness)\n"
+    "- Convexity (asymmetric payoff potential)\n"
+    "- Fragility via negativa (avoid the fragile)\n"
+    "- Skin in the game (insider alignment)\n"
+    "- Volatility regime (low vol = danger)\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: antifragile business with convex payoff AND not fragile.\n"
+    "- Bearish: fragile business (high leverage, thin margins, volatile earnings) OR no skin in the game.\n"
+    "- Neutral: mixed signals, or insufficient data to judge fragility.\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: Truly antifragile with strong convexity and skin in the game\n"
+    "- 70-89%: Low fragility with decent optionality\n"
+    "- 50-69%: Mixed fragility signals, uncertain tail exposure\n"
+    "- 30-49%: Some fragility detected, weak insider alignment\n"
+    "- 10-29%: Clearly fragile or dangerous vol regime\n"
+    "\n"
+    "Use Taleb's vocabulary: antifragile, convexity, skin in the game, via negativa, barbell, turkey problem, Lindy effect.\n"
+    "Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: “- ” + one fact or judgment under ~100 chars. Stay in Taleb's antifragile/via-negativa voice. Do not invent data. Return JSON only."
+)
 
 
 def nassim_taleb_agent(state: AgentState, agent_id: str = "nassim_taleb_agent"):
@@ -32,10 +56,7 @@ def nassim_taleb_agent(state: AgentState, agent_id: str = "nassim_taleb_agent"):
     # Look one year back for insider trades and news
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
 
-    analysis_data = {}
-    taleb_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -96,7 +117,7 @@ def nassim_taleb_agent(state: AgentState, agent_id: str = "nassim_taleb_agent"):
         total_score = tail_risk_analysis["score"] + antifragility_analysis["score"] + convexity_analysis["score"] + fragility_analysis["score"] + skin_in_game_analysis["score"] + volatility_regime_analysis["score"] + black_swan_analysis["score"]
         max_possible_score = tail_risk_analysis["max_score"] + antifragility_analysis["max_score"] + convexity_analysis["max_score"] + fragility_analysis["max_score"] + skin_in_game_analysis["max_score"] + volatility_regime_analysis["max_score"] + black_swan_analysis["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -113,24 +134,25 @@ def nassim_taleb_agent(state: AgentState, agent_id: str = "nassim_taleb_agent"):
         progress.update_status(agent_id, ticker, "Generating Nassim Taleb analysis")
         taleb_output = generate_taleb_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        taleb_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=taleb_output.reasoning)
+        return {
             "signal": taleb_output.signal,
             "confidence": taleb_output.confidence,
             "reasoning": taleb_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=taleb_output.reasoning)
+    taleb_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Create the message
     message = HumanMessage(content=json.dumps(taleb_analysis), name=agent_id)
 
     # Show reasoning if requested
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(taleb_analysis, agent_id)
 
     # Add the signal to the analyst_signals list
@@ -656,7 +678,7 @@ def generate_taleb_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str = "nassim_taleb_agent",
-) -> NassimTalebSignal:
+) -> BaseSignal:
     """Get investment decision from LLM with a compact prompt."""
 
     facts = {
@@ -672,56 +694,15 @@ def generate_taleb_output(
         "market_cap": analysis_data.get("market_cap"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Nassim Taleb. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Checklist for decision:\n"
-                "- Antifragility (benefits from disorder)\n"
-                "- Tail risk profile (fat tails, skewness)\n"
-                "- Convexity (asymmetric payoff potential)\n"
-                "- Fragility via negativa (avoid the fragile)\n"
-                "- Skin in the game (insider alignment)\n"
-                "- Volatility regime (low vol = danger)\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: antifragile business with convex payoff AND not fragile.\n"
-                "- Bearish: fragile business (high leverage, thin margins, volatile earnings) OR no skin in the game.\n"
-                "- Neutral: mixed signals, or insufficient data to judge fragility.\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: Truly antifragile with strong convexity and skin in the game\n"
-                "- 70-89%: Low fragility with decent optionality\n"
-                "- 50-69%: Mixed fragility signals, uncertain tail exposure\n"
-                "- 30-49%: Some fragility detected, weak insider alignment\n"
-                "- 10-29%: Clearly fragile or dangerous vol regime\n"
-                "\n"
-                "Use Taleb's vocabulary: antifragile, convexity, skin in the game, via negativa, barbell, turkey problem, Lindy effect.\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
-
-    def create_default_nassim_taleb_signal():
-        return NassimTalebSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=NassimTalebSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_nassim_taleb_signal,
+        default_factory=_default,
     )

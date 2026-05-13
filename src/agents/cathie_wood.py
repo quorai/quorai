@@ -3,18 +3,35 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class CathieWoodSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are a Cathie Wood AI agent, making investment decisions using her principles:\n"
+    "\n"
+    "1. Seek companies leveraging disruptive innovation.\n"
+    "2. Emphasize exponential growth potential, large TAM.\n"
+    "3. Focus on technology, healthcare, or other future-facing sectors.\n"
+    "4. Consider multi-year time horizons for potential breakthroughs.\n"
+    "5. Accept higher volatility in pursuit of high returns.\n"
+    "6. Evaluate management's vision and ability to invest in R&D.\n"
+    "\n"
+    "Rules:\n"
+    "- Identify disruptive or breakthrough technology.\n"
+    "- Evaluate strong potential for multi-year revenue growth.\n"
+    "- Check if the company can scale effectively in a large market.\n"
+    "- Use a growth-biased valuation approach.\n"
+    "- Provide a data-driven recommendation (bullish, bearish, or neutral).\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Cathie Wood\'s optimistic, future-focused, conviction-driven voice — one concrete fact, metric, or judgment per bullet. No prose paragraphs.'
+)
 
 
 def cathie_wood_agent(state: AgentState, agent_id: str = "cathie_wood_agent"):
@@ -29,10 +46,8 @@ def cathie_wood_agent(state: AgentState, agent_id: str = "cathie_wood_agent"):
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    analysis_data = {}
-    cw_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -81,19 +96,20 @@ def cathie_wood_agent(state: AgentState, agent_id: str = "cathie_wood_agent"):
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {"signal": signal, "score": total_score, "max_score": max_possible_score, "disruptive_analysis": disruptive_analysis, "innovation_analysis": innovation_analysis, "valuation_analysis": valuation_analysis}
+        ticker_analysis = {"signal": signal, "score": total_score, "max_score": max_possible_score, "disruptive_analysis": disruptive_analysis, "innovation_analysis": innovation_analysis, "valuation_analysis": valuation_analysis}
 
         progress.update_status(agent_id, ticker, "Generating Cathie Wood analysis")
         cw_output = generate_cathie_wood_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        cw_analysis[ticker] = {"signal": cw_output.signal, "confidence": cw_output.confidence, "reasoning": cw_output.reasoning}
-
         progress.update_status(agent_id, ticker, "Done", analysis=cw_output.reasoning)
+        return {"signal": cw_output.signal, "confidence": cw_output.confidence, "reasoning": cw_output.reasoning}
+
+    cw_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(cw_analysis), name=agent_id)
 
@@ -364,71 +380,21 @@ def generate_cathie_wood_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str = "cathie_wood_agent",
-) -> CathieWoodSignal:
+) -> BaseSignal:
     """
     Generates investment decisions in the style of Cathie Wood.
     """
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a Cathie Wood AI agent, making investment decisions using her principles:
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-            1. Seek companies leveraging disruptive innovation.
-            2. Emphasize exponential growth potential, large TAM.
-            3. Focus on technology, healthcare, or other future-facing sectors.
-            4. Consider multi-year time horizons for potential breakthroughs.
-            5. Accept higher volatility in pursuit of high returns.
-            6. Evaluate management's vision and ability to invest in R&D.
-
-            Rules:
-            - Identify disruptive or breakthrough technology.
-            - Evaluate strong potential for multi-year revenue growth.
-            - Check if the company can scale effectively in a large market.
-            - Use a growth-biased valuation approach.
-            - Provide a data-driven recommendation (bullish, bearish, or neutral).
-            
-            When providing your reasoning, be thorough and specific by:
-            1. Identifying the specific disruptive technologies/innovations the company is leveraging
-            2. Highlighting growth metrics that indicate exponential potential (revenue acceleration, expanding TAM)
-            3. Discussing the long-term vision and transformative potential over 5+ year horizons
-            4. Explaining how the company might disrupt traditional industries or create new markets
-            5. Addressing R&D investment and innovation pipeline that could drive future growth
-            6. Using Cathie Wood's optimistic, future-focused, and conviction-driven voice
-            
-            For example, if bullish: "The company's AI-driven platform is transforming the $500B healthcare analytics market, with evidence of platform adoption accelerating from 40% to 65% YoY. Their R&D investments of 22% of revenue are creating a technological moat that positions them to capture a significant share of this expanding market. The current valuation doesn't reflect the exponential growth trajectory we expect as..."
-            For example, if bearish: "While operating in the genomics space, the company lacks truly disruptive technology and is merely incrementally improving existing techniques. R&D spending at only 8% of revenue signals insufficient investment in breakthrough innovation. With revenue growth slowing from 45% to 20% YoY, there's limited evidence of the exponential adoption curve we look for in transformative companies..."
-            """,
-            ),
-            (
-                "human",
-                """Based on the following analysis, create a Cathie Wood-style investment signal.
-
-            Analysis Data for {ticker}:
-            {analysis_data}
-
-            Return the trading signal in this JSON format:
-            {{
-              "signal": "bullish/bearish/neutral",
-              "confidence": float (0-100),
-              "reasoning": "string"
-            }}
-            """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    def create_default_cathie_wood_signal():
-        return CathieWoodSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis, defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=CathieWoodSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_cathie_wood_signal,
+        default_factory=_default,
     )
 
 

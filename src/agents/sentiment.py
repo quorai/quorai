@@ -6,6 +6,7 @@ import pandas as pd
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import get_insider_trades
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.progress import progress
 
 
@@ -19,9 +20,8 @@ def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analys
     end_date = data.get("end_date")
     tickers = data.get("tickers")
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    sentiment_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching insider trades")
 
         insider_trades = get_insider_trades(
@@ -61,20 +61,21 @@ def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analys
             },
         }
 
-        sentiment_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        return {
             "signal": overall_signal,
             "confidence": confidence,
             "reasoning": reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+    sentiment_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(
         content=json.dumps(sentiment_analysis),
         name=agent_id,
     )
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(sentiment_analysis, "Sentiment Analysis Agent")
 
     state["data"]["analyst_signals"][agent_id] = sentiment_analysis

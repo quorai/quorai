@@ -3,18 +3,35 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class MohnishPabraiSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Mohnish Pabrai — the Dhandho investor. Your edge is cloning and asymmetry, not original research.\n"
+    "\n"
+    "Dhandho framework (heads I win, tails I don't lose much):\n"
+    "1. Cloning first: is this a business that Buffett, Munger, or another respected investor already owns or has studied? Clone their thesis — Pabrai does not seek original ideas.\n"
+    "2. Asymmetric payoff: the downside must be bounded (low leverage, real assets, essential service) while the upside is 2-5x in 2-3 years.\n"
+    "3. FCF yield as the margin of safety: Pabrai demands 8%+ free cash flow yield before buying. Without FCF yield, there is no Dhandho.\n"
+    "4. Simple businesses only: if you cannot explain the business in one sentence, you cannot buy it.\n"
+    "5. Concentrated: Pabrai runs a highly concentrated 10-stock portfolio. Only top-decile opportunities make the cut.\n"
+    "6. No leverage, no complexity, no turnarounds (unless the turnaround is already happening): fragile balance sheets = binary outcomes = not Dhandho.\n"
+    "7. Patience: Pabrai will wait years for the price to reach intrinsic value. He does not chase.\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: high FCF yield + simple business + low leverage + asymmetric payoff + ideally being cloned from a great investor\n"
+    "- Bearish: negative FCF, leveraged, complex, or no identifiable asymmetry\n"
+    "- Neutral: good business but not cheap enough to be Dhandho-grade\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Pabrai\'s patient, Dhandho-focused voice — one concrete fact, metric, or judgment per bullet. No prose paragraphs.'
+)
 
 
 def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agent"):
@@ -24,12 +41,9 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
 
-    analysis_data: dict[str, any] = {}
-    pabrai_analysis: dict[str, any] = {}
-
     # Pabrai focuses on: downside protection, simple business, moat via unit economics, FCF yield vs alternatives,
     # and potential for doubling in 2-3 years at low risk.
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -78,7 +92,7 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_score,
@@ -91,22 +105,23 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
         progress.update_status(agent_id, ticker, "Generating Pabrai analysis")
         pabrai_output = generate_pabrai_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        pabrai_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=pabrai_output.reasoning)
+        return {
             "signal": pabrai_output.signal,
             "confidence": pabrai_output.confidence,
             "reasoning": pabrai_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=pabrai_output.reasoning)
+    pabrai_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(pabrai_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(pabrai_analysis, "Mohnish Pabrai Agent")
 
     progress.update_status(agent_id, None, "Done")
@@ -296,61 +311,17 @@ def generate_pabrai_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> MohnishPabraiSignal:
+) -> BaseSignal:
     """Generate Pabrai-style decision focusing on low risk, high uncertainty bets and cloning."""
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are Mohnish Pabrai — the Dhandho investor. Your edge is cloning and asymmetry, not original research.
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-          Dhandho framework (heads I win, tails I don't lose much):
-          1. Cloning first: is this a business that Buffett, Munger, or another respected investor already owns or has studied? Clone their thesis — Pabrai does not seek original ideas.
-          2. Asymmetric payoff: the downside must be bounded (low leverage, real assets, essential service) while the upside is 2-5x in 2-3 years.
-          3. FCF yield as the margin of safety: Pabrai demands 8%+ free cash flow yield before buying. Without FCF yield, there is no Dhandho.
-          4. Simple businesses only: if you cannot explain the business in one sentence, you cannot buy it.
-          5. Concentrated: Pabrai runs a highly concentrated 10-stock portfolio. Only top-decile opportunities make the cut.
-          6. No leverage, no complexity, no turnarounds (unless the turnaround is already happening): fragile balance sheets = binary outcomes = not Dhandho.
-          7. Patience: Pabrai will wait years for the price to reach intrinsic value. He does not chase.
-
-          Signal rules:
-          - Bullish: high FCF yield + simple business + low leverage + asymmetric payoff + ideally being cloned from a great investor
-          - Bearish: negative FCF, leveraged, complex, or no identifiable asymmetry
-          - Neutral: good business but not cheap enough to be Dhandho-grade
-          """,
-            ),
-            (
-                "human",
-                """Analyze {ticker} using the provided data.
-
-          DATA:
-          {analysis_data}
-
-          Return EXACTLY this JSON:
-          {{
-            "signal": "bullish" | "bearish" | "neutral",
-            "confidence": float (0-100),
-            "reasoning": "string with Pabrai-style analysis focusing on downside protection, FCF yield, and doubling potential"
-          }}
-          """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "analysis_data": json.dumps(analysis_data, indent=2),
-            "ticker": ticker,
-        }
-    )
-
-    def create_default_pabrai_signal():
-        return MohnishPabraiSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis, defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
         state=state,
-        pydantic_model=MohnishPabraiSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
-        default_factory=create_default_pabrai_signal,
+        default_factory=_default,
     )

@@ -5,7 +5,6 @@ import logging
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from src.backtesting.controller import AgentController
 from src.backtesting.types import AgentDecisions, PortfolioSnapshot
 from src.broker import Broker
 from src.broker.alpaca_client import AlpacaClient
@@ -14,6 +13,8 @@ from src.live.audit_journal import AuditJournal
 from src.live.executor import LiveExecutor
 from src.live.risk_gate import RiskGate
 from src.live.sod_equity import load_sod_equity, save_sod_equity
+from src.llm.request import RunRequest
+from src.orchestration.preflight import PipelineContext
 
 if TYPE_CHECKING:
     from src.live.idempotency_guard import IdempotencyGuard
@@ -33,10 +34,14 @@ class LiveRunner:
         llm_temperature: float | None = None,
         dry_run: bool = False,
         show_reasoning: bool = False,
+        use_regime_selection: bool = False,
+        use_conviction_weights: bool = False,
+        enable_signal_log: bool = True,
         broker: Broker | None = None,
         journal: AuditJournal | None = None,
         risk_gate: RiskGate | None = None,
         idempotency_guard: IdempotencyGuard | None = None,
+        request: RunRequest | None = None,
     ) -> None:
         self.tickers = tickers
         self.model_name = model_name
@@ -46,11 +51,25 @@ class LiveRunner:
         self.llm_temperature = llm_temperature
         self.dry_run = dry_run
         self.show_reasoning = show_reasoning
+        self._use_regime_selection = use_regime_selection
+        self._use_conviction_weights = use_conviction_weights
+        self._enable_signal_log = enable_signal_log
         self._broker = broker
         self._journal = journal
         self._risk_gate = risk_gate
         self._idempotency_guard = idempotency_guard
+        self._request = request
         self._sod_equity: float = 0.0
+        self._signal_log_path: str | None = None
+        self._token_summary_data: dict = {}
+
+    @property
+    def signal_log_path(self) -> str | None:
+        return self._signal_log_path
+
+    def token_summary(self) -> dict:
+        """Return aggregated token-usage stats from the last prepare() call."""
+        return self._token_summary_data
 
     def prepare(self) -> tuple[AgentDecisions, PortfolioSnapshot]:
         """Sync portfolio and run the agent graph; return decisions + snapshot.
@@ -86,20 +105,53 @@ class LiveRunner:
         start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         end_date = today.strftime("%Y-%m-%d")
 
-        # 4. Run agent graph
-        controller = AgentController()
-        output = controller.run_agent(
-            run_quorai,
+        # 4. Fetch SPY for regime selection (~120-day lookback)
+        spy_df = None
+        if self._use_regime_selection:
+            from src.tools.api import get_price_data
+
+            regime_start = (today - timedelta(days=120)).strftime("%Y-%m-%d")
+            fetched = get_price_data("SPY", regime_start, end_date)
+            spy_df = fetched if not fetched.empty else None
+            if spy_df is None:
+                logger.warning("SPY price data unavailable — skipping regime selection")
+
+        # 5. Fetch signal prices (7-day lookback) for the signal log
+        signal_prices: dict[str, float] = {}
+        if self._enable_signal_log:
+            from src.tools.api import get_prices
+
+            lookback_str = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+            for ticker in self.tickers:
+                prices = get_prices(ticker, lookback_str, end_date)
+                if prices:
+                    signal_prices[ticker] = prices[-1].close
+
+        # 6. Run agent graph via shared orchestration context
+        with PipelineContext.build(
+            agent=run_quorai,
             tickers=self.tickers,
-            start_date=start_date,
-            end_date=end_date,
-            portfolio=snapshot,
+            run_id=f"live-{end_date}",
             model_name=self.model_name,
             model_provider=self.model_provider,
             selected_analysts=self.selected_analysts,
             llm_temperature=self.llm_temperature,
             show_reasoning=self.show_reasoning,
-        )
+            use_regime_selection=self._use_regime_selection,
+            use_conviction_weights=self._use_conviction_weights,
+            enable_signal_log=self._enable_signal_log,
+            request=self._request,
+        ) as ctx:
+            self._signal_log_path = ctx.signal_log_path
+            output = ctx.run_cycle(
+                date=end_date,
+                lookback_start=start_date,
+                portfolio=snapshot,
+                signal_prices=signal_prices,
+                spy_df=spy_df,
+            )
+            self._token_summary_data = ctx.token_summary()
+
         return output["decisions"], snapshot
 
     def execute(self, decisions: AgentDecisions) -> dict[str, str]:

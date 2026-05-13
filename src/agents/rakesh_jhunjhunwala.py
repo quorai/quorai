@@ -3,18 +3,37 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class RakeshJhunjhunwalaSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Rakesh Jhunjhunwala, India's most celebrated equity investor. Apply your structural growth-value philosophy:\n"
+    "\n"
+    "1. Macro tailwind first: does this business ride a long-term structural wave (domestic consumption, financialisation, infrastructure, technology adoption in EM)?\n"
+    "2. Growth at the right price: seek businesses growing earnings at 20%+ with P/E still reasonable relative to that growth (Indian-market PEG thinking)\n"
+    "3. Management with skin in the game: promoter holding is a key signal — high promoter stake = aligned; pledged shares = red flag\n"
+    "4. Earnings quality: cash conversion ratio, consistent ROE > 15%, no accounting gimmicks\n"
+    "5. Balance sheet conservatism: low leverage is non-negotiable; highly leveraged businesses destroyed wealth in India's 2018-2020 credit cycle\n"
+    "6. Market leadership: prefer #1 or #2 in a large, growing domestic market — oligopoly with pricing power\n"
+    "7. Contrarian timing: Jhunjhunwala's best trades came when sentiment was deeply negative on a fundamentally sound business\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: structural tailwind + strong earnings quality + low leverage + market leadership + out-of-favour timing\n"
+    "- Bearish: promoter pledging, leverage spiral, cyclical without structural moat, or valuation already pricing in perfection\n"
+    "- Neutral: good business but no structural tailwind or valuation is fair\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line.\n'
+    "Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars.\n"
+    "Stay in Jhunjhunwala's bold, conviction-driven, long-term voice — one concrete fact, metric, or judgment per bullet.\n"
+    "No prose paragraphs."
+)
 
 
 def rakesh_jhunjhunwala_agent(state: AgentState, agent_id: str = "rakesh_jhunjhunwala_agent"):
@@ -23,11 +42,8 @@ def rakesh_jhunjhunwala_agent(state: AgentState, agent_id: str = "rakesh_jhunjhu
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    # Collect all analysis for LLM reasoning
-    analysis_data = {}
-    jhunjhunwala_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -104,7 +120,7 @@ def rakesh_jhunjhunwala_agent(state: AgentState, agent_id: str = "rakesh_jhunjhu
         # Create comprehensive analysis summary
         intrinsic_value_analysis = analyze_rakesh_jhunjhunwala_style(financial_line_items, intrinsic_value=intrinsic_value, current_price=market_cap)
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_score,
@@ -123,19 +139,20 @@ def rakesh_jhunjhunwala_agent(state: AgentState, agent_id: str = "rakesh_jhunjhu
         progress.update_status(agent_id, ticker, "Generating Jhunjhunwala analysis")
         jhunjhunwala_output = generate_jhunjhunwala_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        jhunjhunwala_analysis[ticker] = jhunjhunwala_output.model_dump()
-
         progress.update_status(agent_id, ticker, "Done", analysis=jhunjhunwala_output.reasoning)
+        return jhunjhunwala_output.model_dump()
+
+    jhunjhunwala_analysis = parallel_per_ticker(tickers, _analyze)
 
     # ─── Push message back to graph state ──────────────────────────────────────
     message = HumanMessage(content=json.dumps(jhunjhunwala_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(jhunjhunwala_analysis, "Rakesh Jhunjhunwala Agent")
 
     state["data"]["analyst_signals"][agent_id] = jhunjhunwala_analysis
@@ -603,58 +620,17 @@ def generate_jhunjhunwala_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> RakeshJhunjhunwalaSignal:
+) -> BaseSignal:
     """Get investment decision from LLM with Jhunjhunwala's principles"""
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are Rakesh Jhunjhunwala, India's most celebrated equity investor. Apply your structural growth-value philosophy:
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-                1. Macro tailwind first: does this business ride a long-term structural wave (domestic consumption, financialisation, infrastructure, technology adoption in EM)?
-                2. Growth at the right price: seek businesses growing earnings at 20%+ with P/E still reasonable relative to that growth (Indian-market PEG thinking)
-                3. Management with skin in the game: promoter holding is a key signal — high promoter stake = aligned; pledged shares = red flag
-                4. Earnings quality: cash conversion ratio, consistent ROE > 15%, no accounting gimmicks
-                5. Balance sheet conservatism: low leverage is non-negotiable; highly leveraged businesses destroyed wealth in India's 2018-2020 credit cycle
-                6. Market leadership: prefer #1 or #2 in a large, growing domestic market — oligopoly with pricing power
-                7. Contrarian timing: Jhunjhunwala's best trades came when sentiment was deeply negative on a fundamentally sound business
-
-                Signal rules:
-                - Bullish: structural tailwind + strong earnings quality + low leverage + market leadership + out-of-favour timing
-                - Bearish: promoter pledging, leverage spiral, cyclical without structural moat, or valuation already pricing in perfection
-                - Neutral: good business but no structural tailwind or valuation is fair
-
-                Use Jhunjhunwala's voice: bold, conviction-driven, long-term, India-flavoured even when analysing global companies.
-                """,
-            ),
-            (
-                "human",
-                """Based on the following data, create the investment signal as Rakesh Jhunjhunwala would:
-
-                Analysis Data for {ticker}:
-                {analysis_data}
-
-                Return the trading signal in the following JSON format exactly:
-                {{
-                  "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": float between 0 and 100,
-                  "reasoning": "string"
-                }}
-                """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    # Default fallback signal in case parsing fails
-    def create_default_rakesh_jhunjhunwala_signal():
-        return RakeshJhunjhunwalaSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis, defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=RakeshJhunjhunwalaSignal,
+        pydantic_model=BaseSignal,
         state=state,
         agent_name=agent_id,
-        default_factory=create_default_rakesh_jhunjhunwala_signal,
+        default_factory=_default,
     )

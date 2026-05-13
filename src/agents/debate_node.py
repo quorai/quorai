@@ -8,18 +8,19 @@ from typing_extensions import Literal
 
 from src.graph.state import AgentState, _flatten_reasoning, show_agent_reasoning
 from src.utils.analysts import get_agent_to_group
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
 logger = logging.getLogger(__name__)
 
 _STANCE_SCORE = {"bullish": 1, "bearish": -1, "neutral": 0}
-_SCORE_TO_STANCE = {True: "bullish", False: "bearish"}  # used after threshold check
 
 
 def _aggregate_to_groups(
     analyst_signals: dict[str, dict],
     tickers: list[str],
+    agent_weights: dict[str, float] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """Deterministically collapse 25 individual signals into per-group stances.
 
@@ -40,7 +41,9 @@ def _aggregate_to_groups(
             if ticker not in raw:
                 continue
             signal = sig_data.get("signal", "neutral")
-            confidence = float(sig_data.get("confidence") or 0.0)
+            raw_conf = float(sig_data.get("confidence") or 0.0)
+            w = (agent_weights or {}).get(agent_label, 1.0)
+            confidence = raw_conf * max(0.0, w)
             reasoning = _flatten_reasoning(sig_data.get("reasoning", ""))
             raw[ticker].setdefault(group, []).append((agent_label, signal, confidence, reasoning))
 
@@ -121,24 +124,17 @@ def debate_node(state: AgentState) -> dict:
     """Aggregate analyst signals by strategy group, then synthesise a group-level debate per contested ticker."""
     analyst_signals = state["data"].get("analyst_signals", {})
     tickers = state["data"]["tickers"]
+    conviction_weights = state.get("metadata", {}).get("conviction_weights") or {}
 
-    group_signals = _aggregate_to_groups(analyst_signals, tickers)
+    group_signals = _aggregate_to_groups(analyst_signals, tickers, agent_weights=conviction_weights)
 
-    debate_summaries: dict[str, dict] = {}
-    for ticker in tickers:
+    # Only debate contested tickers (at least one bullish AND one bearish group)
+    contested = [t for t in tickers if any(d["signal"] == "bullish" for d in group_signals.get(t, {}).values()) and any(d["signal"] == "bearish" for d in group_signals.get(t, {}).values())]
+
+    def _debate_ticker(ticker: str) -> dict | None:
         groups = group_signals.get(ticker, {})
-
-        non_neutral = [g for g, d in groups.items() if d["signal"] != "neutral"]
-        bullish_groups = [g for g in non_neutral if groups[g]["signal"] == "bullish"]
-        bearish_groups = [g for g in non_neutral if groups[g]["signal"] == "bearish"]
-
-        # Only debate when at least one group is bullish AND at least one is bearish
-        if not bullish_groups or not bearish_groups:
-            continue
-
         progress.update_status("debate_node", ticker, "Synthesising group debate")
 
-        # Build concise table for the prompt
         rows = []
         for group, data in groups.items():
             dissent_note = f" (internal dissent: {data['dissent']})" if data["dissent"] else ""
@@ -147,7 +143,6 @@ def debate_node(state: AgentState) -> dict:
         group_table = "\n".join(rows)
 
         prompt = _TEMPLATE.invoke({"ticker": ticker, "group_table": group_table})
-
         try:
             summary = call_llm(
                 prompt=prompt,
@@ -155,13 +150,17 @@ def debate_node(state: AgentState) -> dict:
                 agent_name="debate_node",
                 state=state,
             )
-            debate_summaries[ticker] = {
+            return {
                 "group_positions": [gp.model_dump() for gp in summary.group_positions],
                 "core_disagreement": summary.core_disagreement,
                 "consensus_strength": summary.consensus_strength,
             }
         except Exception:
             logger.exception("Debate synthesis failed for %s; skipping", ticker)
+            return None
+
+    raw_results = parallel_per_ticker(contested, _debate_ticker)
+    debate_summaries: dict[str, dict] = {t: v for t, v in raw_results.items() if v is not None}
 
     if state["metadata"].get("show_reasoning") and debate_summaries:
         show_agent_reasoning(debate_summaries, "Debate Node")

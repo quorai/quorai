@@ -3,14 +3,15 @@
 ## Overview
 
 Quorai is an educational proof-of-concept for an AI-driven investment system. It runs a
-multi-agent pipeline in which 19 "analyst" agents (personality-based LLM investors such as Warren
+multi-agent pipeline in which 25 "analyst" agents (personality-based LLM investors such as Warren
 Buffett, Michael Burry, Cathie Wood, etc. plus dedicated fundamental/technical/sentiment/valuation
-agents) each produce a bullish/bearish/neutral signal per ticker. Those signals flow into a risk
-manager and then a portfolio manager that emits final trading decisions. No real trades are executed.
+agents) each produce a bullish/bearish/neutral signal per ticker. Those signals flow through a
+debate node, then a risk manager, then a portfolio manager that emits final trading decisions.
+No real trades are executed.
 
 The repo has three layers:
 
-- **`src/` — core library / CLI.** The agent graph, all analyst agents, data fetching (Finnhub),
+- **`src/` — core library / CLI.** The agent graph, all analyst agents, data fetching (yfinance + Finnhub),
   disk-persisted caching, multi-provider LLM dispatch, and the backtesting engine. This code is
   also reused as a library by the web backend.
 - **`app/` — web application.** A FastAPI backend and a React + ReactFlow frontend. The backend
@@ -29,7 +30,7 @@ flowchart LR
   %% ---------- Clients ----------
   subgraph Clients
     CLI["CLI\nsrc/main.py"]
-    BT["Backtest CLI\nsrc/backtesting/cli.py\nrun_backtest.py"]
+    BT["Backtest CLI\nsrc/backtesting/cli.py"]
     BROWSER["Browser\nReact + Vite + ReactFlow\napp/frontend  :5173"]
   end
 
@@ -47,14 +48,18 @@ flowchart LR
 
     subgraph LangGraph["LangGraph StateGraph"]
       START((start))
-      ANALYSTS["19 analyst nodes\n(personality + quant)\nsrc/agents/*"]
+      ANALYSTS["25 analyst nodes\n(personality + quant)\nsrc/agents/*"]
+      DEBATE["debate_node\nsrc/agents/debate_node.py"]
       RISK["risk_management_agent"]
       PM["portfolio_manager"]
       ENDN((END))
       START --> ANALYSTS
-      ANALYSTS --> RISK
+      ANALYSTS --> DEBATE
+      DEBATE --> RISK
       RISK --> PM --> ENDN
     end
+
+    PREFLIGHT["PipelineContext\nsrc/orchestration/preflight.py\n(regime + weights + signal log)"]
 
     API["Market data\nsrc/tools/api.py"]
     CACHE[("Disk cache\n.cache/api_cache.pkl")]
@@ -82,7 +87,8 @@ flowchart LR
   API --> CACHE
   API --> FINNHUB
   LLMU --> LLMPROVIDERS
-  ENGINE -- "one full graph\nper business day" --> GRAPHBUILD
+  ENGINE --> PREFLIGHT
+  PREFLIGHT -- "one full graph\nper business day" --> GRAPHBUILD
 ```
 
 ---
@@ -92,8 +98,7 @@ flowchart LR
 | Entry point | Purpose |
 |---|---|
 | `src/main.py` | CLI — single run via `run_quorai()`. Parses args with `src/cli/input.py`, builds and invokes the LangGraph, prints results via `src/utils/display.py`. |
-| `src/backtesting/cli.py` | Modular backtest CLI — minimal terminal output. |
-| `run_backtest.py` | Standalone script with hardcoded tickers/dates/analysts. |
+| `src/backtesting/cli.py` | Backtest CLI — subcommands: (default) single run, `compare` (A/B), `feedback` (label + score). |
 
 ---
 
@@ -103,39 +108,54 @@ The graph is built in `src/main.py:create_workflow()` and uses a shared `AgentSt
 (`src/graph/state.py`) with three annotated channels: `messages` (concat), `data` (merge),
 `metadata` (merge).
 
-Topology: a synthetic `start_node` fans out in parallel to every selected analyst.
-All analysts feed into `risk_management_agent`, which edges to `portfolio_manager`, which edges to `END`.
+Topology: `start_node` fans out in parallel to every selected analyst. All analysts feed into
+`debate_node`, which aggregates signals into 5 strategy groups and (optionally) applies conviction
+weights. The debate output flows to `risk_management_agent`, then `portfolio_manager`, then `END`.
+Regime selection and conviction-weight loading happen **engine-side** in
+`src/orchestration/preflight.py:PipelineContext` before the graph is invoked.
 
 ```
-start_node → [analyst_1 … analyst_19] → risk_management_agent → portfolio_manager → END
+start_node → [analyst_1 … analyst_25] → debate_node → risk_management_agent → portfolio_manager → END
 ```
 
 **Analyst interface** (`src/agents/*.py`): each node reads `state["data"]` for tickers and dates,
 fetches financial data via `src/tools/api.py`, calls the LLM via `src/utils/llm.py:call_llm()`
-with a Pydantic signal schema (e.g., `WarrenBuffettSignal`) containing `signal`, `confidence`,
-`reasoning`, and writes results to `state["data"]["analyst_signals"][agent_id]`.
+with a shared `BaseSignal` Pydantic schema (`src/agents/_signals.py`) containing `signal`
+(bullish/bearish/neutral), `confidence` (int 0–100), and `reasoning`, and writes results to
+`state["data"]["analyst_signals"][agent_id]`.
+
+**Debate node** (`src/agents/debate_node.py`): aggregates individual analyst signals into 5
+strategy groups (`deep_value`, `growth_and_catalyst`, `macro_and_cycle`, `quant_systematic`,
+`quality_compounders`, `sentiment_and_analytical`). Within each group, signals are weighted by
+per-agent conviction weights loaded from `src/feedback/weights.json` (when
+`use_conviction_weights=True`; falls back to uniform weights). The group consensus signals are
+written to `state["data"]["analyst_signals"]` and forwarded to the risk manager.
 
 **Risk manager** (`src/agents/risk_manager.py`): pure maths — computes volatility- and
 correlation-adjusted position limits. No LLM call.
 
-**Portfolio manager** (`src/agents/portfolio_manager.py`): aggregates all analyst signals, reads
+**Portfolio manager** (`src/agents/portfolio_manager.py`): aggregates debate group signals, reads
 risk limits, calls the LLM to produce `{action, quantity, confidence, reasoning}` decisions.
 
-The 19 analysts from `src/utils/analysts.py:ANALYST_CONFIG`:
-aswath_damodaran, ben_graham, bill_ackman, cathie_wood, charlie_munger, michael_burry,
-mohnish_pabrai, nassim_taleb, peter_lynch, phil_fisher, rakesh_jhunjhunwala,
-stanley_druckenmiller, warren_buffett, technical_analyst, fundamentals_analyst,
-growth_analyst, news_sentiment_analyst, sentiment_analyst, valuation_analyst.
+The 25 analysts from `src/utils/analysts.py:ANALYST_CONFIG` (type: "analyst"):
+aswath_damodaran, ben_graham, bill_ackman, cathie_wood, charlie_munger, cliff_asness,
+ed_seykota, fundamentals_analyst, growth_analyst, howard_marks, jim_simons, joel_greenblatt,
+michael_burry, mohnish_pabrai, nassim_taleb, news_sentiment_analyst, peter_lynch, phil_fisher,
+rakesh_jhunjhunwala, ray_dalio, sentiment_analyst, stanley_druckenmiller, technical_analyst,
+valuation_analyst, warren_buffett.
 
 ---
 
 ### Data layer
 
-**Provider**: Finnhub only (`src/tools/api.py:28`, `FINNHUB_BASE_URL`). Maps internal field names
-to US-GAAP XBRL concepts for Finnhub's `financials-reported` endpoint.
+**Providers** (dual-source):
+- **yfinance** (`src/tools/_yfinance_fundamentals.py`) — prices, financial metrics, financial
+  line items, market cap. No API key required.
+- **Finnhub** (`src/tools/api.py`, `FINNHUB_BASE_URL`) — insider trades and company news.
+  `FINNHUB_API_KEY` env var required; rate-limit backoff on HTTP 429 in `_make_api_request`.
 
 **Functions**: `get_prices`, `get_financial_metrics`, `search_line_items`, `get_insider_trades`,
-`get_company_news`, `get_market_cap`. Rate-limit backoff on HTTP 429 in `_make_api_request`.
+`get_company_news`, `get_market_cap`, `get_price_data` (convenience, returns a DataFrame).
 
 **Cache** (`src/data/cache.py`): thread-safe, pickle-backed disk persistence at
 `.cache/api_cache.pkl` (atomic write via tmp + replace). Six per-ticker caches keyed on time
@@ -168,16 +188,119 @@ OpenRouter and Kimi reuse `ChatOpenAI` with a custom `base_url`.
 `src/backtesting/engine.py:BacktestEngine` is the core loop:
 
 1. `_prefetch_data()` — pre-pulls 1 year of prices, metrics, insider trades, news, and SPY.
-2. For each business day (`pd.date_range(..., freq="B")`):
+2. For each business day (`pd.date_range(..., freq="B")`), delegates to
+   `PipelineContext.run_cycle()` (`src/orchestration/preflight.py`), which:
+   - Optionally classifies the SPY market regime (`src/regime/classifier.py`) and narrows
+     the active analyst list via `src/regime/policy.py` (when `use_regime_selection=True`).
    - Invokes the full agent graph via `AgentController.run_agent()` (`controller.py`).
+   - Logs per-agent-per-ticker signals and accumulates token usage.
    - Uses **next-day open** as the fill price to avoid lookahead bias.
    - Executes trades via `TradeExecutor` (`trader.py`) → `Portfolio` (`portfolio.py`).
+   - Logs per-agent-per-ticker signals to JSONL via `SignalLogger` (`signal_log.py`).
+   - Accumulates per-agent LLM token counts from `AgentOutput.token_usage`.
    - Computes mark-to-market value via `src/backtesting/valuation.py`.
    - Recomputes metrics (Sharpe, Sortino, max drawdown) via `metrics.py` after ≥3 data points.
 3. Benchmarks against SPY (`benchmarks.py`).
 
+`BacktestEngine` kwargs that activate optional subsystems:
+- `use_regime_selection: bool = False` — daily SPY regime gate (see **Regime selection** below).
+- `use_conviction_weights: bool = False` — load `weights.json` into debate aggregation (see **Conviction-weight feedback loop** below).
+
 The engine treats `run_quorai` as a black box — the entire graph is rebuilt and invoked once
 per simulated day.
+
+---
+
+### Regime selection
+
+`src/regime/classifier.py:classify_regime()` takes the prefetched SPY DataFrame and a date,
+and returns a `MarketRegime` enum value using three indicators:
+
+| Indicator | Window |
+|---|---|
+| SMA trend | 20-day SMA |
+| Short-term vol | 20-day daily-return std |
+| Long-run vol | 60-day daily-return std |
+| Drawdown from peak | Rolling 60-day max |
+
+Rules applied in order:
+1. **RISK_OFF** — drawdown > 8% below peak AND short-vol > 1.5× long-vol
+2. **BULL_TREND** — close > SMA and vol ratio ≤ 1.5
+3. **BEAR_TREND** — close < SMA and vol ratio > 1.0
+4. **NEUTRAL** — otherwise (also used when insufficient history)
+
+`src/regime/policy.py:select_analysts_for_regime()` maps each regime to a subset of strategy
+groups:
+
+| Regime | Active groups |
+|---|---|
+| BULL_TREND | growth_and_catalyst, quant_systematic, quality_compounders, sentiment_and_analytical |
+| BEAR_TREND | deep_value, macro_and_cycle, quality_compounders, sentiment_and_analytical |
+| RISK_OFF | macro_and_cycle, deep_value, sentiment_and_analytical |
+| NEUTRAL | all groups |
+
+The engine calls this per day; the narrowed analyst list replaces `selected_analysts` for
+that bar's graph invocation.
+
+---
+
+### Conviction-weight feedback loop
+
+The feedback pipeline runs as a post-processing step after a backtest completes:
+
+```
+BacktestEngine (signal_log.py JSONL sink)
+  → feedback/labeler.py  (attach 1d / 5d / 20d forward returns)
+  → feedback/scorer.py   (rolling per-agent hit-rate → weights.json + accuracy_report.json)
+  → feedback/loader.py   (load_weights() → {} if missing)
+  → debate_node._aggregate_to_groups()  (weight analyst votes by loaded weights)
+```
+
+**`src/backtesting/signal_log.py:SignalLogger`** — opened at engine start, appends one JSONL
+record per agent+ticker per day: `{date, agent_id, ticker, signal, confidence, price_at_signal}`.
+
+**`src/feedback/labeler.py:label_signals()`** — reads the JSONL, joins with prefetched prices,
+and writes a labeled JSONL with `return_1d`, `return_5d`, `return_20d` columns.
+
+**`src/feedback/scorer.py:compute_weights()`** — reads the labeled JSONL, computes rolling
+hit-rates over the most recent 60 trading-day window per agent (min 5 samples), normalises
+weights to mean = 1.0, writes `weights.json` and `accuracy_report.json`.
+
+**`src/feedback/loader.py:load_weights()`** — reads `weights.json`; returns `{}` if missing
+(causing the debate node to fall back to uniform weights).
+
+**`src/agents/debate_node.py:_aggregate_to_groups()`** — applies weights when
+`use_conviction_weights=True`. Analyst votes within each strategy group are multiplied by their
+weight before being summed into a group consensus signal.
+
+---
+
+### Token telemetry
+
+`src/utils/llm.py:call_llm()` captures `LLMResult.usage_metadata` (or `AIMessage.usage_metadata`)
+after every structured-output call and stores `{input_tokens, output_tokens, total_tokens}` on
+the returned `AgentOutput`.
+
+`src/backtesting/controller.py:AgentController.run_agent()` accumulates per-agent token counts
+into a `token_usage` dict that is returned as part of each day's result.
+
+`BacktestEngine` aggregates token totals across the full run and exposes them in the final metrics
+dict (`get_metrics()`) under key `"token_usage"`.
+
+---
+
+### Comparison harness
+
+`src/backtesting/comparison.py:run_comparison()` accepts a list of `RunConfig` dataclasses
+(same fields as `BacktestEngine` kwargs plus a `label: str`), runs each config sequentially,
+and prints a side-by-side table of:
+- Total return, Sharpe, Sortino, max drawdown
+- Total LLM tokens consumed
+
+The `compare` subcommand (`python -m src.backtesting compare`) accepts two preset comparisons:
+- `--mode regime` — Full analyst set vs regime-selected subset
+- `--mode weights` — Uniform analyst weights vs conviction weights
+- `--mode both` — Both comparisons sequentially
 
 ---
 
@@ -238,7 +361,7 @@ Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
 | Mode | How |
 |---|---|
 | CLI | `uv run python src/main.py --ticker AAPL,MSFT` |
-| Backtest | `uv run python run_backtest.py` |
+| Backtest | `uv run python -m src.backtesting --tickers AAPL,MSFT --model <model>` |
 | GitHub Pages | Static site at `docs/` — three tabs: Agents gallery, Trading Flow diagram, About |
 | Docker | Planned — not yet present in the repository |
 
@@ -253,12 +376,23 @@ and `docs/flow.json` from `ANALYST_CONFIG` in `src/utils/analysts.py`. The three
 `src/live_trading.py` is the entry point for paper/live trading via Alpaca.
 
 ```
-AlpacaClient → PortfolioAdapter → AgentController → LiveExecutor
-                                                         ↓
-                                                     RiskGate
-                                                         ↓
-                                                     AuditJournal → logs/trades-YYYY-MM-DD.jsonl
+AlpacaClient → PortfolioAdapter → PipelineContext.run_cycle() → LiveExecutor
+                                          ↓                              ↓
+                                    (regime + weights                 RiskGate
+                                     + signal log)                       ↓
+                                                                   AuditJournal → logs/trades-YYYY-MM-DD.jsonl
 ```
+
+`LiveRunner.prepare()` runs the full pre-trade pipeline:
+
+1. Syncs portfolio from Alpaca.
+2. Builds `PipelineContext` (`src/orchestration/preflight.py`), which loads conviction weights,
+   opens a `SignalLogger`, and wraps the `AgentController`.
+3. Calls `PipelineContext.run_cycle()` which resolves the market regime (when
+   `--use-regime-selection`), narrows the analyst list, and runs the agent graph.
+4. Closes the signal logger; stores token-usage stats for console/Telegram output.
+
+The live signal log feeds the same `feedback/labeler.py → scorer.py → weights.json` pipeline used by backtests, so conviction weights accumulate over time from live runs.
 
 | Module | Purpose |
 |---|---|
@@ -266,12 +400,20 @@ AlpacaClient → PortfolioAdapter → AgentController → LiveExecutor
 | `src/broker/alpaca_client.py` | Alpaca Trading API wrapper (paper-only safety guard) |
 | `src/broker/portfolio_adapter.py` | Converts Alpaca positions → `PortfolioSnapshot` |
 | `src/live/executor.py` | `LiveExecutor` — submits orders, enforces risk gate, journals trades |
-| `src/live/runner.py` | `LiveRunner` — orchestrates one live trading cycle |
+| `src/live/runner.py` | `LiveRunner` — orchestrates one live trading cycle; wires regime, weights, signal log, token telemetry |
 | `src/live/risk_gate.py` | `RiskGate` — daily loss limit check |
 | `src/live/audit_journal.py` | `AuditJournal` — appends JSON-L trade records |
 | `src/live/sod_equity.py` | Persists start-of-day equity for daily loss calculation |
 | `src/live_trading.py` | CLI entry point — `uv run python src/live_trading.py` |
 | `src/config.py` | `Settings` (pydantic-settings) — centralised env-var config |
+
+`LiveRunner` CLI flags for the new subsystems:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--use-regime-selection` | off | Narrow analysts to regime-appropriate groups via SPY classification |
+| `--use-conviction-weights` | off | Apply per-agent weights from `src/feedback/weights.json` |
+| `--no-signal-log` | (log on) | Suppress writing `logs/signals-live-YYYY-MM-DD.jsonl` |
 
 > **Docker**: Docker support (`docker/docker-compose.yml`) is planned but not yet present in this repository.
 

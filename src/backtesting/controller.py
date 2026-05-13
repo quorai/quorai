@@ -3,6 +3,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, Sequence, cast
 
+from src.llm.request import RunRequest
+from src.utils.llm import get_token_log, reset_token_log
+
 from .portfolio import Portfolio
 from .types import Action, ActionLiteral, AgentDecisions, AgentOutput, PortfolioSnapshot
 
@@ -25,6 +28,8 @@ class AgentController:
         selected_analysts: Sequence[str] | None,
         llm_temperature: float | None = None,
         show_reasoning: bool = False,
+        conviction_weights: dict[str, float] | None = None,
+        request: RunRequest | None = None,
     ) -> AgentOutput:
         # Ensure we pass a plain snapshot dict to preserve legacy expectations
         if isinstance(portfolio, Portfolio):
@@ -32,6 +37,7 @@ class AgentController:
         else:
             portfolio_payload = portfolio
 
+        reset_token_log()
         output = agent(
             tickers=list(tickers),
             start_date=start_date,
@@ -42,6 +48,8 @@ class AgentController:
             selected_analysts=list(selected_analysts) if selected_analysts is not None else None,
             llm_temperature=llm_temperature,
             show_reasoning=show_reasoning,
+            conviction_weights=conviction_weights,
+            request=request,
         )
 
         # Normalize outputs to avoid None/missing keys
@@ -70,5 +78,6 @@ class AgentController:
         normalized_output: AgentOutput = {
             "decisions": normalized_decisions,
             "analyst_signals": analyst_signals_in,
+            "token_usage": get_token_log(),
         }
         return normalized_output

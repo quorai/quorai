@@ -2,7 +2,7 @@ from enum import Enum
 import json
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from langchain_anthropic import ChatAnthropic
 from langchain_deepseek import ChatDeepSeek
@@ -116,7 +116,20 @@ def get_models_list():
     return [{"display_name": model.display_name, "model_name": model.model_name, "provider": model.provider.value} for model in AVAILABLE_MODELS]
 
 
+_model_cache: dict[tuple, Any] = {}
+
+
 def get_model(model_name: str, model_provider: ModelProvider, api_keys: dict = None) -> ChatOpenAI | ChatGroq | GigaChat | None:
+    cache_key = (model_name, str(model_provider), frozenset((api_keys or {}).items()))
+    if cache_key in _model_cache:
+        return _model_cache[cache_key]
+
+    instance = _build_model(model_name, model_provider, api_keys)
+    _model_cache[cache_key] = instance
+    return instance
+
+
+def _build_model(model_name: str, model_provider: ModelProvider, api_keys: dict = None) -> ChatOpenAI | ChatGroq | GigaChat | None:
     cfg = get_settings()
     if model_provider == ModelProvider.GROQ:
         api_key = (api_keys or {}).get("GROQ_API_KEY") or cfg.GROQ_API_KEY

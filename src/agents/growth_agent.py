@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 from src.agents._data_bundle import AgentDataBundle
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.progress import progress
 
 
@@ -22,9 +23,8 @@ def growth_analyst_agent(state: AgentState, agent_id: str = "growth_analyst_agen
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    growth_analysis: dict[str, dict] = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict | None:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -38,37 +38,19 @@ def growth_analyst_agent(state: AgentState, agent_id: str = "growth_analyst_agen
         financial_metrics = bundle.financial_metrics
         if not financial_metrics or len(financial_metrics) < 4:
             progress.update_status(agent_id, ticker, "Failed: Not enough financial metrics")
-            continue
+            return None
 
         most_recent_metrics = financial_metrics[0]
         insider_trades = bundle.insider_trades
 
-        # ------------------------------------------------------------------
-        # Tool Implementation
-        # ------------------------------------------------------------------
-
-        # 1. Historical Growth Analysis
         growth_trends = analyze_growth_trends(financial_metrics)
-
-        # 2. Growth-Oriented Valuation
         valuation_metrics = analyze_valuation(most_recent_metrics)
-
-        # 3. Margin Expansion Monitor
         margin_trends = analyze_margin_trends(financial_metrics)
-
-        # 4. Insider Conviction Tracker
         insider_conviction = analyze_insider_conviction(insider_trades)
-
-        # 5. Financial Health Check
         financial_health = check_financial_health(most_recent_metrics)
 
-        # ------------------------------------------------------------------
-        # Aggregate & signal
-        # ------------------------------------------------------------------
         scores = {"growth": growth_trends["score"], "valuation": valuation_metrics["score"], "margins": margin_trends["score"], "insider": insider_conviction["score"], "health": financial_health["score"]}
-
         weights = {"growth": 0.40, "valuation": 0.25, "margins": 0.15, "insider": 0.10, "health": 0.10}
-
         weighted_score = sum(scores[key] * weights[key] for key in scores)
 
         if weighted_score > 0.6:
@@ -79,17 +61,18 @@ def growth_analyst_agent(state: AgentState, agent_id: str = "growth_analyst_agen
             signal = "neutral"
 
         confidence = round(abs(weighted_score - 0.5) * 2 * 100)
-
         reasoning = {"historical_growth": growth_trends, "growth_valuation": valuation_metrics, "margin_expansion": margin_trends, "insider_conviction": insider_conviction, "financial_health": financial_health, "final_analysis": {"signal": signal, "confidence": confidence, "weighted_score": round(weighted_score, 2)}}
 
-        growth_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        return {
             "signal": signal,
             "confidence": confidence,
             "reasoning": reasoning,
         }
-        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
 
-    # ---- Emit message (for LLM tool chain) ----
+    raw = parallel_per_ticker(tickers, _analyze)
+    growth_analysis: dict[str, dict] = {k: v for k, v in raw.items() if v is not None}
+
     msg = HumanMessage(content=json.dumps(growth_analysis), name=agent_id)
     if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(growth_analysis, "Growth Analysis Agent")

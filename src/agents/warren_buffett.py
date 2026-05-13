@@ -3,18 +3,41 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class WarrenBuffettSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Warren Buffett. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Checklist (Buffett's actual priorities, in order):\n"
+    "1. Is this business within my circle of competence? If not, pass.\n"
+    "2. Durable competitive moat: pricing power, brand, switching costs, network effect, low-cost position\n"
+    "3. Management as stewards of capital: do they allocate retained earnings wisely (buybacks, bolt-on acquisitions, dividends)?\n"
+    "4. Financial strength: strong FCF, low leverage, consistent earnings — 'don't lose money'\n"
+    "5. Valuation vs intrinsic value: buy at a price that gives a margin of safety\n"
+    "6. Long-term ownership mindset: would you be comfortable holding this forever?\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: strong moat + exceptional management capital allocation + margin_of_safety > 0\n"
+    "- Bearish: poor business OR clearly overvalued OR management destroys capital\n"
+    "- Neutral: good business but margin_of_safety <= 0, or mixed evidence\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: Exceptional business within my circle, trading at attractive price\n"
+    "- 70-89%: Good business with decent moat, fair valuation\n"
+    "- 50-69%: Mixed signals, would need more information or better price\n"
+    "- 30-49%: Outside my expertise or concerning fundamentals\n"
+    "- 10-29%: Poor business or significantly overvalued\n"
+    "\n"
+    "Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: “- ” + one fact or judgment under ~100 chars. Stay in Warren Buffett's voice. Do not invent data. Return JSON only."
+)
 
 
 def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agent"):
@@ -23,11 +46,8 @@ def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agen
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    # Collect all analysis for LLM reasoning
-    analysis_data = {}
-    buffett_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -57,7 +77,6 @@ def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agen
         market_cap = bundle.market_cap
 
         progress.update_status(agent_id, ticker, "Analyzing fundamentals")
-        # Analyze fundamentals
         fundamental_analysis = analyze_fundamentals(metrics)
 
         progress.update_status(agent_id, ticker, "Analyzing consistency")
@@ -78,10 +97,7 @@ def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agen
         progress.update_status(agent_id, ticker, "Calculating intrinsic value")
         intrinsic_value_analysis = calculate_intrinsic_value(financial_line_items)
 
-        # Calculate total score without circle of competence (LLM will handle that)
         total_score = fundamental_analysis["score"] + consistency_analysis["score"] + moat_analysis["score"] + mgmt_analysis["score"] + pricing_power_analysis["score"] + book_value_analysis["score"]
-
-        # Update max possible score calculation
         max_possible_score = (
             10  # fundamental_analysis (ROE, debt, margins, current ratio)
             + moat_analysis["max_score"]
@@ -90,14 +106,12 @@ def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agen
             + 5  # book_value_growth (0-5)
         )
 
-        # Add margin of safety analysis if we have both intrinsic value and current price
         margin_of_safety = None
         intrinsic_value = intrinsic_value_analysis["intrinsic_value"]
         if intrinsic_value and market_cap:
             margin_of_safety = (intrinsic_value - market_cap) / market_cap
 
-        # Combine all analysis results for LLM evaluation
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -115,30 +129,26 @@ def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agen
         progress.update_status(agent_id, ticker, "Generating Warren Buffett analysis")
         buffett_output = generate_buffett_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        # Store analysis in consistent format with other agents
-        buffett_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=buffett_output.reasoning)
+        return {
             "signal": buffett_output.signal,
             "confidence": buffett_output.confidence,
             "reasoning": buffett_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=buffett_output.reasoning)
+    buffett_analysis = parallel_per_ticker(tickers, _analyze)
 
-    # Create the message
     message = HumanMessage(content=json.dumps(buffett_analysis), name=agent_id)
 
-    # Show reasoning if requested
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(buffett_analysis, agent_id)
 
-    # Add the signal to the analyst_signals list
     state["data"]["analyst_signals"][agent_id] = buffett_analysis
-
     progress.update_status(agent_id, None, "Done")
 
     return {"messages": [message], "data": state["data"]}
@@ -530,18 +540,11 @@ def calculate_intrinsic_value(financial_line_items: list) -> dict[str, any]:
     stage2_growth = min(conservative_growth * 0.5, 0.04)  # Stage 2: half of stage 1, cap at 4%
     terminal_growth = 0.025  # Long-term GDP growth rate
 
-    # Risk-adjusted discount rate based on business quality
-    base_discount_rate = 0.09  # Base 9%
-
-    # Adjust based on analysis scores (if available in calling context)
-    # For now, use conservative 10%
     discount_rate = 0.10
 
-    # Three-stage DCF model
-    stage1_years = 5  # High growth phase
-    stage2_years = 5  # Transition phase
+    stage1_years = 5
+    stage2_years = 5
 
-    present_value = 0
     details.append(f"Using three-stage DCF: Stage 1 ({stage1_growth:.1%}, {stage1_years}y), Stage 2 ({stage2_growth:.1%}, {stage2_years}y), Terminal ({terminal_growth:.1%})")
 
     # Stage 1: Higher growth
@@ -584,7 +587,7 @@ def calculate_intrinsic_value(financial_line_items: list) -> dict[str, any]:
             "discount_rate": discount_rate,
             "stage1_years": stage1_years,
             "stage2_years": stage2_years,
-            "historical_growth": conservative_growth if "conservative_growth" in locals() else None,
+            "historical_growth": conservative_growth,
         },
         "details": details,
     }
@@ -706,7 +709,7 @@ def generate_buffett_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str = "warren_buffett_agent",
-) -> WarrenBuffettSignal:
+) -> BaseSignal:
     """Get investment decision from LLM with a compact prompt."""
 
     # --- Build compact facts here ---
@@ -724,52 +727,15 @@ def generate_buffett_output(
         "margin_of_safety": analysis_data.get("margin_of_safety"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Warren Buffett. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Checklist (Buffett's actual priorities, in order):\n"
-                "1. Is this business within my circle of competence? If not, pass.\n"
-                "2. Durable competitive moat: pricing power, brand, switching costs, network effect, low-cost position\n"
-                "3. Management as stewards of capital: do they allocate retained earnings wisely (buybacks, bolt-on acquisitions, dividends)?\n"
-                "4. Financial strength: strong FCF, low leverage, consistent earnings — 'don't lose money'\n"
-                "5. Valuation vs intrinsic value: buy at a price that gives a margin of safety\n"
-                "6. Long-term ownership mindset: would you be comfortable holding this forever?\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: strong moat + exceptional management capital allocation + margin_of_safety > 0\n"
-                "- Bearish: poor business OR clearly overvalued OR management destroys capital\n"
-                "- Neutral: good business but margin_of_safety <= 0, or mixed evidence\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: Exceptional business within my circle, trading at attractive price\n"
-                "- 70-89%: Good business with decent moat, fair valuation\n"
-                "- 50-69%: Mixed signals, would need more information or better price\n"
-                "- 30-49%: Outside my expertise or concerning fundamentals\n"
-                "- 10-29%: Poor business or significantly overvalued\n"
-                "\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            ("human", 'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}'),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     # Default fallback uses int confidence to match schema and avoid parse retries
     def create_default_warren_buffett_signal():
-        return WarrenBuffettSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=WarrenBuffettSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=create_default_warren_buffett_signal,

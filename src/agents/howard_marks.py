@@ -3,18 +3,40 @@ from datetime import datetime, timedelta
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class HowardMarksSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Howard Marks. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Framework:\n"
+    "- Credit quality: avoid losses above all else; weak coverage = first-level trap\n"
+    "- Cycle position: where is the market/stock in the fear-greed cycle?\n"
+    "- Risk premium: are you being paid adequately for the risk you're taking?\n"
+    "- Second-level thinking: what does the price imply? What does the crowd miss?\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: strong credit quality + fear/early-cycle pricing + adequate risk premium + second-level insight\n"
+    "- Bearish: stressed credit OR late-cycle greed pricing OR inadequate risk premium\n"
+    "- Neutral: average credit and mid-cycle with fair compensation — nothing exceptional\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: Distressed-asset-level opportunity — high quality, fear pricing, insider buying\n"
+    "- 70-89%: Good credit, below-average enthusiasm, decent compensation\n"
+    "- 50-69%: Average quality and average pricing\n"
+    "- 30-49%: Some credit stress or late-cycle signals\n"
+    "- 10-29%: Stressed credit, greed pricing, thin risk premium — avoid\n"
+    "\n"
+    "Use Marks's vocabulary: first-level thinking, second-level thinking, cycle, risk premium, wall of worry, tree doesn't grow to the sky.\n"
+    'Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one fact or judgment under ~100 chars. Stay in Howard Marks\'s second-level-thinking voice. Do not invent data. Return JSON only.'
+)
 
 
 def howard_marks_agent(state: AgentState, agent_id: str = "howard_marks_agent"):
@@ -26,10 +48,7 @@ def howard_marks_agent(state: AgentState, agent_id: str = "howard_marks_agent"):
 
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
 
-    analysis_data = {}
-    marks_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -72,7 +91,7 @@ def howard_marks_agent(state: AgentState, agent_id: str = "howard_marks_agent"):
         total_score = credit_quality["score"] + cycle_position["score"] + risk_premium["score"] + second_level["score"]
         max_possible_score = credit_quality["max_score"] + cycle_position["max_score"] + risk_premium["max_score"] + second_level["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -86,22 +105,23 @@ def howard_marks_agent(state: AgentState, agent_id: str = "howard_marks_agent"):
         progress.update_status(agent_id, ticker, "Generating Howard Marks analysis")
         marks_output = generate_marks_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        marks_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=marks_output.reasoning)
+        return {
             "signal": marks_output.signal,
             "confidence": marks_output.confidence,
             "reasoning": marks_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=marks_output.reasoning)
+    marks_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(marks_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(marks_analysis, agent_id)
 
     state["data"]["analyst_signals"][agent_id] = marks_analysis
@@ -298,7 +318,7 @@ def generate_marks_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str = "howard_marks_agent",
-) -> HowardMarksSignal:
+) -> BaseSignal:
     """Get investment decision from LLM in Howard Marks's voice."""
     facts = {
         "score": analysis_data.get("score"),
@@ -310,53 +330,14 @@ def generate_marks_output(
         "market_cap": analysis_data.get("market_cap"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Howard Marks. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Framework:\n"
-                "- Credit quality: avoid losses above all else; weak coverage = first-level trap\n"
-                "- Cycle position: where is the market/stock in the fear-greed cycle?\n"
-                "- Risk premium: are you being paid adequately for the risk you're taking?\n"
-                "- Second-level thinking: what does the price imply? What does the crowd miss?\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: strong credit quality + fear/early-cycle pricing + adequate risk premium + second-level insight\n"
-                "- Bearish: stressed credit OR late-cycle greed pricing OR inadequate risk premium\n"
-                "- Neutral: average credit and mid-cycle with fair compensation — nothing exceptional\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: Distressed-asset-level opportunity — high quality, fear pricing, insider buying\n"
-                "- 70-89%: Good credit, below-average enthusiasm, decent compensation\n"
-                "- 50-69%: Average quality and average pricing\n"
-                "- 30-49%: Some credit stress or late-cycle signals\n"
-                "- 10-29%: Stressed credit, greed pricing, thin risk premium — avoid\n"
-                "\n"
-                "Use Marks's vocabulary: first-level thinking, second-level thinking, cycle, risk premium, wall of worry, tree doesn't grow to the sky.\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     def _default():
-        return HowardMarksSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=HowardMarksSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

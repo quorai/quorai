@@ -3,21 +3,43 @@ from datetime import datetime, timedelta
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 import numpy as np
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.agents.technicals import calculate_hurst_exponent, safe_float
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import prices_to_df
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class JimSimonsSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are a Medallion Fund-style statistical arbitrage system inspired by Jim Simons. Decide bullish, bearish, or neutral using only the quantitative signals provided.\n"
+    "\n"
+    "Signal framework (no narratives, only data):\n"
+    "- Mean reversion: low Z-score = oversold → buy; high Z-score = overbought → sell\n"
+    "- Autocorrelation: negative ACF(1) + recent loss = mean-reversion buy setup\n"
+    "- Microstructure: high-volume washout = capitulation buy; high-volume accumulation = follow\n"
+    "- Hurst regime: H < 0.5 = mean-reverting (our edge); H > 0.5 = trending (no edge here)\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: mean-reverting regime (Hurst < 0.5) + oversold Z-score + negative ACF on loss + capitulation volume\n"
+    "- Bearish: overbought Z-score + positive ACF + distribution volume + mean-reverting regime\n"
+    "- Neutral: trending regime (no stat-arb edge), mixed signals, or insufficient data\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: All four signals strongly aligned in mean-reverting regime\n"
+    "- 70-89%: Three signals aligned\n"
+    "- 50-69%: Two signals or weak alignment\n"
+    "- 30-49%: One signal, rest neutral\n"
+    "- 10-29%: Trending regime or all signals bearish\n"
+    "\n"
+    "Use purely statistical language: Z-score, autocorrelation, Hurst, mean reversion, regime, signal, edge.\n"
+    'No fundamental commentary. Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one statistical fact or judgment under ~100 chars. Return JSON only.'
+)
 
 
 def jim_simons_agent(state: AgentState, agent_id: str = "jim_simons_agent"):
@@ -29,10 +51,7 @@ def jim_simons_agent(state: AgentState, agent_id: str = "jim_simons_agent"):
 
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
 
-    analysis_data = {}
-    simons_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching price data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -59,7 +78,7 @@ def jim_simons_agent(state: AgentState, agent_id: str = "jim_simons_agent"):
         total_score = mean_reversion["score"] + autocorrelation["score"] + microstructure["score"] + hurst_regime["score"]
         max_possible_score = mean_reversion["max_score"] + autocorrelation["max_score"] + microstructure["max_score"] + hurst_regime["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -72,22 +91,23 @@ def jim_simons_agent(state: AgentState, agent_id: str = "jim_simons_agent"):
         progress.update_status(agent_id, ticker, "Generating Jim Simons analysis")
         simons_output = generate_simons_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        simons_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=simons_output.reasoning)
+        return {
             "signal": simons_output.signal,
             "confidence": simons_output.confidence,
             "reasoning": simons_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=simons_output.reasoning)
+    simons_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(simons_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(simons_analysis, agent_id)
 
     state["data"]["analyst_signals"][agent_id] = simons_analysis
@@ -246,7 +266,7 @@ def generate_simons_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str = "jim_simons_agent",
-) -> JimSimonsSignal:
+) -> BaseSignal:
     """Get investment decision from LLM in Jim Simons / Renaissance style: data only, no story."""
     facts = {
         "score": analysis_data.get("score"),
@@ -257,53 +277,14 @@ def generate_simons_output(
         "hurst_regime": analysis_data.get("hurst_regime", {}).get("details"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are a Medallion Fund-style statistical arbitrage system inspired by Jim Simons. Decide bullish, bearish, or neutral using only the quantitative signals provided.\n"
-                "\n"
-                "Signal framework (no narratives, only data):\n"
-                "- Mean reversion: low Z-score = oversold → buy; high Z-score = overbought → sell\n"
-                "- Autocorrelation: negative ACF(1) + recent loss = mean-reversion buy setup\n"
-                "- Microstructure: high-volume washout = capitulation buy; high-volume accumulation = follow\n"
-                "- Hurst regime: H < 0.5 = mean-reverting (our edge); H > 0.5 = trending (no edge here)\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: mean-reverting regime (Hurst < 0.5) + oversold Z-score + negative ACF on loss + capitulation volume\n"
-                "- Bearish: overbought Z-score + positive ACF + distribution volume + mean-reverting regime\n"
-                "- Neutral: trending regime (no stat-arb edge), mixed signals, or insufficient data\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: All four signals strongly aligned in mean-reverting regime\n"
-                "- 70-89%: Three signals aligned\n"
-                "- 50-69%: Two signals or weak alignment\n"
-                "- 30-49%: One signal, rest neutral\n"
-                "- 10-29%: Trending regime or all signals bearish\n"
-                "\n"
-                "Use purely statistical language: Z-score, autocorrelation, Hurst, mean reversion, regime, signal, edge.\n"
-                "No fundamental commentary. Keep reasoning under 150 characters. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     def _default():
-        return JimSimonsSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=JimSimonsSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

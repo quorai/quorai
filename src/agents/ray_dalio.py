@@ -2,18 +2,40 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class RayDalioSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Ray Dalio. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Framework:\n"
+    "- Debt cycle: where is the company in its debt cycle? High leverage + rising = late cycle danger\n"
+    "- Economic regime: growth × inflation quadrant — expansion or contraction?\n"
+    "- Balance sheet resilience: can it survive the bad times without credit markets?\n"
+    "- Valuation as cycle indicator: expensive = late cycle greed, cheap = early cycle fear\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: early/mid debt cycle + expansion regime + resilient balance sheet + fair or cheap valuation\n"
+    "- Bearish: late-cycle debt trap OR contraction regime OR fragile balance sheet with stretched valuation\n"
+    "- Neutral: mixed signals or transitional cycle position\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: Clear early/mid cycle, strong balance sheet, attractive valuation\n"
+    "- 70-89%: Mostly positive cycle and balance sheet signals\n"
+    "- 50-69%: Mixed or transitional\n"
+    "- 30-49%: Late-cycle risks present but not severe\n"
+    "- 10-29%: Debt trap, contraction regime, or fragile + expensive\n"
+    "\n"
+    "Use Dalio's vocabulary: debt cycle, deleveraging, beautiful/ugly deleveraging, economic machine, risk-parity, all-weather, regime.\n"
+    'Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one fact or judgment under ~100 chars. Stay in Dalio\'s economic-machine voice. Do not invent data. Return JSON only.'
+)
 
 
 def ray_dalio_agent(state: AgentState, agent_id: str = "ray_dalio_agent"):
@@ -23,10 +45,7 @@ def ray_dalio_agent(state: AgentState, agent_id: str = "ray_dalio_agent"):
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
 
-    analysis_data = {}
-    dalio_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -66,7 +85,7 @@ def ray_dalio_agent(state: AgentState, agent_id: str = "ray_dalio_agent"):
         total_score = debt_cycle["score"] + economic_regime["score"] + balance_sheet["score"] + valuation_cycle["score"]
         max_possible_score = debt_cycle["max_score"] + economic_regime["max_score"] + balance_sheet["max_score"] + valuation_cycle["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -80,22 +99,23 @@ def ray_dalio_agent(state: AgentState, agent_id: str = "ray_dalio_agent"):
         progress.update_status(agent_id, ticker, "Generating Ray Dalio analysis")
         dalio_output = generate_dalio_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        dalio_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=dalio_output.reasoning)
+        return {
             "signal": dalio_output.signal,
             "confidence": dalio_output.confidence,
             "reasoning": dalio_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=dalio_output.reasoning)
+    dalio_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(dalio_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(dalio_analysis, agent_id)
 
     state["data"]["analyst_signals"][agent_id] = dalio_analysis
@@ -276,7 +296,7 @@ def generate_dalio_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str = "ray_dalio_agent",
-) -> RayDalioSignal:
+) -> BaseSignal:
     """Get investment decision from LLM in Ray Dalio's voice."""
     facts = {
         "score": analysis_data.get("score"),
@@ -288,53 +308,14 @@ def generate_dalio_output(
         "market_cap": analysis_data.get("market_cap"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Ray Dalio. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Framework:\n"
-                "- Debt cycle: where is the company in its debt cycle? High leverage + rising = late cycle danger\n"
-                "- Economic regime: growth × inflation quadrant — expansion or contraction?\n"
-                "- Balance sheet resilience: can it survive the bad times without credit markets?\n"
-                "- Valuation as cycle indicator: expensive = late cycle greed, cheap = early cycle fear\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: early/mid debt cycle + expansion regime + resilient balance sheet + fair or cheap valuation\n"
-                "- Bearish: late-cycle debt trap OR contraction regime OR fragile balance sheet with stretched valuation\n"
-                "- Neutral: mixed signals or transitional cycle position\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: Clear early/mid cycle, strong balance sheet, attractive valuation\n"
-                "- 70-89%: Mostly positive cycle and balance sheet signals\n"
-                "- 50-69%: Mixed or transitional\n"
-                "- 30-49%: Late-cycle risks present but not severe\n"
-                "- 10-29%: Debt trap, contraction regime, or fragile + expensive\n"
-                "\n"
-                "Use Dalio's vocabulary: debt cycle, deleveraging, beautiful/ugly deleveraging, economic machine, risk-parity, all-weather, regime.\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     def _default():
-        return RayDalioSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=RayDalioSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

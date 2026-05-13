@@ -1,5 +1,6 @@
 import json
 import operator
+import textwrap
 import threading
 
 from langchain_core.messages import BaseMessage
@@ -32,11 +33,11 @@ _ACTION_STYLE = {
 
 def _flatten_reasoning(reasoning) -> str:
     if isinstance(reasoning, str):
-        return reasoning[:120]
+        return reasoning
     if isinstance(reasoning, dict):
         parts = [f"{k}={v['signal']}" for k, v in reasoning.items() if isinstance(v, dict) and "signal" in v]
-        return ", ".join(parts) if parts else str(reasoning)[:120]
-    return str(reasoning)[:120]
+        return ", ".join(parts) if parts else str(reasoning)
+    return str(reasoning)
 
 
 def _signal_block(data: dict) -> list[Text]:
@@ -52,8 +53,17 @@ def _signal_block(data: dict) -> list[Text]:
         t = Text()
         t.append(f"  {ticker:<6}  ", style="default")
         t.append(f"{signal.upper():<8}", style=style)
-        t.append(f"  {conf_str:>4}  {reasoning}")
+        t.append(f"  {conf_str:>4}")
         rows.append(t)
+        if reasoning:
+            for raw_line in reasoning.splitlines():
+                if not raw_line.strip():
+                    continue
+                wrapped = textwrap.wrap(raw_line, width=80, initial_indent="    ", subsequent_indent="      ")
+                for w in wrapped:
+                    r = Text()
+                    r.append(w)
+                    rows.append(r)
     return rows
 
 
@@ -76,24 +86,65 @@ def _decision_block(data: dict) -> list[Text]:
     return rows
 
 
+_CONSENSUS_STYLE = {
+    "strong_agreement": "bold green",
+    "mixed": "bold yellow",
+    "structural_split": "bold red",
+}
+
+
 def _debate_block(data: dict) -> list[Text]:
     rows = []
     for ticker, payload in data.items():
         if not isinstance(payload, dict):
             continue
-        rows.append(Text(f"  {ticker}", style="bold"))
-        t_bull = Text()
-        t_bull.append("    Bull: ", style="bold green")
-        t_bull.append(payload.get("bull_case", ""))
-        rows.append(t_bull)
-        t_bear = Text()
-        t_bear.append("    Bear: ", style="bold red")
-        t_bear.append(payload.get("bear_case", ""))
-        rows.append(t_bear)
-        t_crux = Text()
-        t_crux.append("    Crux: ", style="bold yellow")
-        t_crux.append(payload.get("core_disagreement", ""))
-        rows.append(t_crux)
+
+        group_positions = payload.get("group_positions")
+        if group_positions is not None:
+            consensus = payload.get("consensus_strength", "")
+            t = Text()
+            t.append(f"  {ticker}  ", style="bold")
+            t.append(f"[{consensus}]", style=_CONSENSUS_STYLE.get(consensus, ""))
+            rows.append(t)
+
+            for gp in group_positions:
+                group = gp.get("group", "")
+                stance = gp.get("stance", "")
+                arg = gp.get("key_argument", "")
+                t = Text()
+                t.append(f"    {group:<30}  ", style="default")
+                t.append(f"{stance.upper():<8}", style=_SIGNAL_STYLE.get(stance.lower(), ""))
+                rows.append(t)
+                for line in textwrap.wrap(arg, width=72):
+                    r = Text()
+                    r.append(f"      {line}")
+                    rows.append(r)
+
+            core = payload.get("core_disagreement", "")
+            if core:
+                rows.append(Text())
+                t = Text()
+                t.append("    Crux: ", style="bold yellow")
+                rows.append(t)
+                for line in textwrap.wrap(core, width=76):
+                    r = Text()
+                    r.append(f"      {line}")
+                    rows.append(r)
+            rows.append(Text())
+        else:
+            rows.append(Text(f"  {ticker}", style="bold"))
+            t_bull = Text()
+            t_bull.append("    Bull: ", style="bold green")
+            t_bull.append(payload.get("bull_case", ""))
+            rows.append(t_bull)
+            t_bear = Text()
+            t_bear.append("    Bear: ", style="bold red")
+            t_bear.append(payload.get("bear_case", ""))
+            rows.append(t_bear)
+            t_crux = Text()
+            t_crux.append("    Crux: ", style="bold yellow")
+            t_crux.append(payload.get("core_disagreement", ""))
+            rows.append(t_crux)
     return rows
 
 
@@ -125,7 +176,7 @@ def _detect_block_type(data: dict) -> str:
             return "signal"
         if "action" in payload:
             return "decision"
-        if "bull_case" in payload:
+        if "bull_case" in payload or "group_positions" in payload:
             return "debate"
         if "remaining_position_limit" in payload or "volatility_metrics" in payload:
             return "risk"
@@ -137,8 +188,9 @@ def show_agent_reasoning(output, agent_name: str) -> None:
     # Import here to avoid circular imports at module load time
     from src.utils.progress import progress
 
+    display_name = agent_name.replace("_", " ").title()
     sep = "=" * 48
-    header = f"{'=' * 10} {agent_name.center(28)} {'=' * 10}"
+    header = f"{'=' * 10} {display_name.center(28)} {'=' * 10}"
 
     rows: list[Text] = []
     if isinstance(output, dict) and output:

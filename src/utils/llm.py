@@ -2,8 +2,13 @@
 
 import json
 import logging
+import os
+import random
+import threading
+import time
 from typing import Any
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
@@ -12,6 +17,80 @@ from src.llm.models import get_model, get_model_info
 from src.utils.progress import progress
 
 logger = logging.getLogger(__name__)
+
+# Semaphore to cap concurrent LLM calls across all threads.
+# Defaults to QUORAI_LLM_MAX_CONCURRENCY env var (default 16).
+_llm_semaphore = threading.Semaphore(int(os.environ.get("QUORAI_LLM_MAX_CONCURRENCY", "16")))
+
+
+class _UsageCapture(BaseCallbackHandler):
+    """LangChain callback that captures token usage from any LLM invocation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+        self.cache_read_tokens: int = 0
+        self.cache_creation_tokens: int = 0
+
+    def on_llm_end(self, response, **kwargs) -> None:
+        for gen_list in response.generations:
+            for gen in gen_list:
+                msg = getattr(gen, "message", None)
+                um = getattr(msg, "usage_metadata", None) or {}
+                self.input_tokens += int(um.get("input_tokens", 0))
+                self.output_tokens += int(um.get("output_tokens", 0))
+                # OpenRouter surfaces cache counts with different keys per provider
+                self.cache_read_tokens += int(
+                    um.get("cache_read_input_tokens", 0)  # Anthropic-routed
+                    or um.get("prompt_cache_hit_tokens", 0)  # DeepSeek-routed
+                )
+                self.cache_creation_tokens += int(
+                    um.get("cache_creation_input_tokens", 0)  # Anthropic-routed
+                    or um.get("prompt_cache_miss_tokens", 0)  # DeepSeek-routed
+                )
+
+
+_run_token_log: list[dict] = []
+_token_log_lock = threading.Lock()
+
+
+def reset_token_log() -> None:
+    """Clear the per-run token log. Call before each agent graph invocation."""
+    with _token_log_lock:
+        _run_token_log.clear()
+
+
+def get_token_log() -> list[dict]:
+    """Return a snapshot of per-call token records for the current run."""
+    with _token_log_lock:
+        return list(_run_token_log)
+
+
+def get_token_summary() -> dict:
+    """Return aggregated token counts and call count for the current run."""
+    with _token_log_lock:
+        snapshot = list(_run_token_log)
+    return {
+        "calls": len(snapshot),
+        "input_tokens": sum(e["input_tokens"] for e in snapshot),
+        "output_tokens": sum(e["output_tokens"] for e in snapshot),
+        "total_tokens": sum(e["input_tokens"] + e["output_tokens"] for e in snapshot),
+        "cache_read_tokens": sum(e.get("cache_read_tokens", 0) for e in snapshot),
+        "cache_creation_tokens": sum(e.get("cache_creation_tokens", 0) for e in snapshot),
+    }
+
+
+def _attach_cache_control(invoke_prompt: Any, model_name: str, model_provider: str) -> None:
+    """Attach Anthropic cache_control to the system message for anthropic/* OpenRouter calls.
+
+    Other OpenRouter-routed models (DeepSeek, Gemini, etc.) cache automatically — no marker needed.
+    """
+    if model_provider.upper() != "OPENROUTER" or not model_name.startswith("anthropic/"):
+        return
+    messages = getattr(invoke_prompt, "messages", None) or (invoke_prompt if isinstance(invoke_prompt, list) else None)
+    if messages and hasattr(messages[0], "additional_kwargs"):
+        messages[0].additional_kwargs.setdefault("cache_control", {"type": "ephemeral"})
 
 
 def call_llm(
@@ -82,6 +161,8 @@ def call_llm(
 
     hint = HumanMessage(content="IMPORTANT: You MUST respond with ONLY a valid JSON object matching the schema. No prose, no explanation, no markdown fences.")
 
+    _capture = _UsageCapture()
+
     for attempt in range(max_retries):
         try:
             if attempt > 0 and use_manual_extraction:
@@ -94,21 +175,47 @@ def call_llm(
             else:
                 invoke_prompt = prompt
 
-            result = llm.invoke(invoke_prompt)
+            _attach_cache_control(invoke_prompt, model_name, model_provider)
+
+            with _llm_semaphore:
+                result = llm.invoke(invoke_prompt, config={"callbacks": [_capture]})
+
+            token_entry = {
+                "agent": agent_name or "unknown",
+                "model": model_name,
+                "input_tokens": _capture.input_tokens,
+                "output_tokens": _capture.output_tokens,
+                "cache_read_tokens": _capture.cache_read_tokens,
+                "cache_creation_tokens": _capture.cache_creation_tokens,
+            }
 
             if use_manual_extraction:
                 parsed_result = extract_json_from_response(result.content)
                 if parsed_result:
-                    return pydantic_model(**parsed_result)
+                    output = pydantic_model(**parsed_result)
+                    with _token_log_lock:
+                        _run_token_log.append(token_entry)
+                    return output
                 raise ValueError("Could not extract JSON from LLM response")
             else:
+                with _token_log_lock:
+                    _run_token_log.append(token_entry)
                 return result
 
         except Exception as exc:
             exc_str = str(exc)
+
+            # Switch extraction mode on provider rejection of json_mode
             if not use_manual_extraction and ("400" in exc_str or "response_format" in exc_str.lower() or "bad request" in exc_str.lower()):
                 logger.warning("json_mode rejected by provider for %s (attempt %d); switching to manual extraction", agent_name or model_name, attempt + 1)
                 use_manual_extraction = True
+
+            # Exponential back-off for rate-limit errors; immediate retry otherwise
+            is_rate_limit = "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
+            if is_rate_limit and attempt < max_retries - 1:
+                backoff = min(2**attempt + random.uniform(0, 1), 30)
+                logger.warning("Rate limit for %s (attempt %d); backing off %.1fs", agent_name or model_name, attempt + 1, backoff)
+                time.sleep(backoff)
 
             if agent_name:
                 progress.update_status(agent_name, None, f"Error - retry {attempt + 1}/{max_retries}")

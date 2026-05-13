@@ -5,11 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import datetime
 import logging
+import os
+import threading
 
 import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+_YF_MAX_CONCURRENCY = max(1, int(os.environ.get("QUORAI_YF_MAX_CONCURRENCY", "4")))
+
+_yf_semaphore = threading.BoundedSemaphore(_YF_MAX_CONCURRENCY)
 
 # Maps internal field names -> ordered list of yfinance row label alternates.
 # yfinance row labels drift across library versions; always try alternates.
@@ -132,12 +138,13 @@ def fetch_statements(ticker: str, period: str, end_date: str, limit: int) -> lis
         return []
 
     try:
-        if period == "ttm":
-            return _fetch_ttm(yf_ticker, ticker, end_date, limit)
-        elif period == "quarterly":
-            return _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=True)
-        else:
-            return _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=False)
+        with _yf_semaphore:
+            if period == "ttm":
+                return _fetch_ttm(yf_ticker, ticker, end_date, limit)
+            elif period == "quarterly":
+                return _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=True)
+            else:
+                return _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=False)
     except Exception as exc:
         logger.warning("yfinance statement fetch failed for %s (%s): %s", ticker, period, exc)
         return []
@@ -267,73 +274,74 @@ def fetch_market_cap(ticker: str, end_date: str) -> float | None:
         return None
 
     try:
-        today = datetime.date.today()
-        end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d").date()
-        near_today = abs((today - end_dt).days) <= 7
+        with _yf_semaphore:
+            today = datetime.date.today()
+            end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d").date()
+            near_today = abs((today - end_dt).days) <= 7
 
-        if near_today:
-            # fast_info uses the chart endpoint (no Crumb auth) — prefer it over .info
-            try:
-                fi = yf_ticker.fast_info
-                mcap = fi.get("market_cap") if isinstance(fi, dict) else getattr(fi, "market_cap", None)
+            if near_today:
+                # fast_info uses the chart endpoint (no Crumb auth) — prefer it over .info
+                try:
+                    fi = yf_ticker.fast_info
+                    mcap = fi.get("market_cap") if isinstance(fi, dict) else getattr(fi, "market_cap", None)
+                    if mcap:
+                        return float(mcap)
+                except Exception:
+                    pass
+                # Fallback: .info (Crumb-protected, may 401 intermittently)
+                try:
+                    info = yf_ticker.info or {}
+                except Exception:
+                    info = {}
+                mcap = info.get("marketCap")
                 if mcap:
                     return float(mcap)
-            except Exception:
-                pass
-            # Fallback: .info (Crumb-protected, may 401 intermittently)
-            try:
-                info = yf_ticker.info or {}
-            except Exception:
-                info = {}
-            mcap = info.get("marketCap")
-            if mcap:
-                return float(mcap)
-            shares = info.get("sharesOutstanding")
-            price = info.get("currentPrice") or info.get("regularMarketPrice")
-            if shares and price:
-                return float(shares) * float(price)
-            return None
+                shares = info.get("sharesOutstanding")
+                price = info.get("currentPrice") or info.get("regularMarketPrice")
+                if shares and price:
+                    return float(shares) * float(price)
+                return None
 
-        # Historical: get shares from get_shares_full, price from history
-        start_dt = (end_dt - datetime.timedelta(days=35)).strftime("%Y-%m-%d")
-        try:
-            shares_series = yf_ticker.get_shares_full(start=start_dt, end=end_date)
-            if shares_series is not None and not shares_series.empty:
-                # Timezone-strip and take the most recent entry
-                if hasattr(shares_series.index, "tz_convert"):
-                    shares_series.index = shares_series.index.tz_convert(None)
-                shares = float(shares_series.iloc[-1])
-            else:
+            # Historical: get shares from get_shares_full, price from history
+            start_dt = (end_dt - datetime.timedelta(days=35)).strftime("%Y-%m-%d")
+            try:
+                shares_series = yf_ticker.get_shares_full(start=start_dt, end=end_date)
+                if shares_series is not None and not shares_series.empty:
+                    # Timezone-strip and take the most recent entry
+                    if hasattr(shares_series.index, "tz_convert"):
+                        shares_series.index = shares_series.index.tz_convert(None)
+                    shares = float(shares_series.iloc[-1])
+                else:
+                    shares = None
+            except Exception:
                 shares = None
-        except Exception:
-            shares = None
 
-        if shares is None:
-            try:
-                fi = yf_ticker.fast_info
-                sh = fi.get("shares") if isinstance(fi, dict) else getattr(fi, "shares", None)
+            if shares is None:
+                try:
+                    fi = yf_ticker.fast_info
+                    sh = fi.get("shares") if isinstance(fi, dict) else getattr(fi, "shares", None)
+                    if sh:
+                        shares = float(sh)
+                except Exception:
+                    pass
+            if shares is None:
+                try:
+                    info = yf_ticker.info or {}
+                except Exception:
+                    info = {}
+                sh = info.get("sharesOutstanding")
                 if sh:
                     shares = float(sh)
-            except Exception:
-                pass
-        if shares is None:
-            try:
-                info = yf_ticker.info or {}
-            except Exception:
-                info = {}
-            sh = info.get("sharesOutstanding")
-            if sh:
-                shares = float(sh)
 
-        if not shares:
-            return None
+            if not shares:
+                return None
 
-        # Get close price on end_date (or last available trading day before it)
-        hist = yf_ticker.history(start=start_dt, end=end_date, auto_adjust=True)
-        if hist.empty:
-            return None
-        close_price = float(hist["Close"].iloc[-1])
-        return shares * close_price
+            # Get close price on end_date (or last available trading day before it)
+            hist = yf_ticker.history(start=start_dt, end=end_date, auto_adjust=True)
+            if hist.empty:
+                return None
+            close_price = float(hist["Close"].iloc[-1])
+            return shares * close_price
 
     except Exception as exc:
         logger.warning("yfinance market cap fetch failed for %s on %s: %s", ticker, end_date, exc)

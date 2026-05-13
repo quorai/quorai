@@ -22,6 +22,11 @@ A multi-agent AI trading system where specialized LLM analyst agents deliberate 
 - **Backtesting engine** — replay historical data with full agent deliberation and portfolio metrics
 - **Live / paper trading** — execute via Alpaca with optional Telegram approval gate
 - **Bull/bear debate node** — agents argue opposing sides before the portfolio manager decides
+- **Market-regime selection** — classifies the current SPY regime (bull/bear/risk-off/neutral) each day and narrows the active analyst subset accordingly
+- **Conviction-weight feedback loop** — tracks each agent's rolling directional hit-rate; high-accuracy agents receive proportionally more weight in the debate aggregation
+- **Signal logging + forward-return labeling** — persists every per-agent-per-ticker signal to JSONL during a backtest run; a separate labeler attaches 1d/5d/20d forward returns so hit-rates can be computed
+- **Token-usage telemetry** — captures and accumulates LLM token counts per agent across the full backtest run
+- **A/B comparison harness** — runs two backtest configs back-to-back and prints a side-by-side metrics table (full-vs-regime analysts, uniform-vs-conviction weights)
 
 ## How it works
 
@@ -80,12 +85,12 @@ FINNHUB_API_KEY=...
 
 ### Backtesting
 
-Run from the CLI (same flag shape as live trading):
+Run from the CLI:
 
 ```bash
 uv run python -m src.backtesting \
     --tickers AAPL,MSFT \
-    --model deepseek/deepseek-v4-flash \
+    --model deepseek/deepseek-chat \
     --model-provider OpenRouter \
     --show-reasoning
 ```
@@ -99,11 +104,20 @@ Key flags:
 - `--initial-capital` — starting cash (default: 100 000)
 - `--show-reasoning` — print each agent's reasoning
 - `--temperature` — LLM temperature override
+- `--use-regime-selection` — classify SPY regime per day and narrow analysts to the relevant group
+- `--use-conviction-weights` — weight agents by rolling directional hit-rate (requires `src/feedback/weights.json` from a prior scored run)
 
-Alternatively, edit `run_backtest.py` to hardcode the config and run:
+To run a side-by-side A/B comparison, add the `compare` subcommand:
 
 ```bash
-uv run python run_backtest.py
+uv run python -m src.backtesting compare \
+    --tickers AAPL,MSFT \
+    --model deepseek/deepseek-chat \
+    --model-provider OpenRouter \
+    --mode regime    # full analysts vs regime subset
+
+# --mode weights    uniform weights vs conviction weights
+# --mode both       run both comparisons sequentially
 ```
 
 #### Reading the backtest output
@@ -166,11 +180,24 @@ Key flags:
 - `--model` — model name (required)
 - `--model-provider` — provider string (required)
 - `--analysts` — comma-separated analyst IDs to include (default: all)
+- `--use-regime-selection` — classify today's SPY regime and narrow analysts to the matching strategy groups (same logic as `BacktestEngine`)
+- `--use-conviction-weights` — apply per-agent conviction weights from `src/feedback/weights.json`; warns if the file is absent but does not abort
+- `--no-signal-log` — disable writing `logs/signals-live-YYYY-MM-DD.jsonl` (signal logging is on by default)
 - `--dry-run` — print decisions without submitting orders
 - `--confirm` — skip interactive confirmation prompt
 - `--require-approval` — send orders to Telegram for human approval before submitting
+- `--auto-submit` — submit immediately and send an execution report to Telegram afterwards
 - `--margin-requirement` — margin requirement fraction (default: 0.0)
 - `--temperature` — LLM temperature override
+
+After each run the console prints:
+
+```
+Signal log: logs/signals-live-2026-05-12.jsonl
+Tokens: 12 calls, 84 200 in / 3 100 out
+```
+
+The signal JSONL feeds the same `feedback/labeler.py → scorer.py → weights.json` pipeline used in backtesting, so conviction weights improve over time as live-run history accumulates.
 
 ### Telegram approval gate
 
@@ -203,13 +230,17 @@ The bot replies with a confirmation message when a command is recognised. Comman
 |---|---|
 | `src/` | Core library: agents, backtesting engine, LLM dispatch, data fetching, live trading |
 | `src/agents/` | 25 analyst agents (personality + quant) plus risk manager and portfolio manager |
-| `src/backtesting/` | Backtesting engine, portfolio, metrics, CLI |
+| `src/backtesting/` | Engine, portfolio, metrics, CLI (`python -m src.backtesting [compare]`), signal log, A/B harness |
+| `src/regime/` | `MarketRegime` classifier + analyst-selection policy |
+| `src/feedback/` | Forward-return labeler, rolling per-agent scorer, weights loader |
 | `src/broker/` | `Broker` protocol + Alpaca client |
 | `src/live/` | Live executor, runner, risk gate, audit journal |
+| `src/notifications/` | Telegram approval client + command store |
 | `src/data/` | Disk-persisted cache, Pydantic data models |
 | `src/llm/` | Multi-provider LLM dispatch, OpenRouter catalog |
 | `src/utils/` | Analyst registry (`ANALYST_CONFIG`), shared helpers |
 | `src/config.py` | Centralised env-var config via pydantic-settings |
+| `src/orchestration/` | `PipelineContext` — shared pre-graph helper for live and backtest |
 | `tests/` | Unit and integration tests |
 
 ## Running tests

@@ -4,18 +4,32 @@ import json
 import statistics
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class PhilFisherSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are a Phil Fisher AI agent, making investment decisions using his principles:\n"
+    "\n"
+    "1. Emphasize long-term growth potential and quality of management.\n"
+    "2. Focus on companies investing in R&D for future products/services.\n"
+    "3. Look for strong profitability and consistent margins.\n"
+    "4. Willing to pay more for exceptional companies but still mindful of valuation.\n"
+    "5. Rely on thorough research (scuttlebutt) and thorough fundamental checks.\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Phil Fisher\'s methodical, growth-focused, long-term voice — one concrete fact, metric, or judgment per bullet. No prose paragraphs.\n'
+    "\n"
+    "You must output a JSON object with:\n"
+    '  - "signal": "bullish" or "bearish" or "neutral"\n'
+    '  - "confidence": a float between 0 and 100\n'
+    '  - "reasoning": short bullet list, 2–3 bullets preferred, max 5'
+)
 
 
 def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
@@ -34,10 +48,8 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    analysis_data = {}
-    fisher_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -105,7 +117,7 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_possible_score,
@@ -120,18 +132,19 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
         progress.update_status(agent_id, ticker, "Generating Phil Fisher-style analysis")
         fisher_output = generate_fisher_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        fisher_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=fisher_output.reasoning)
+        return {
             "signal": fisher_output.signal,
             "confidence": fisher_output.confidence,
             "reasoning": fisher_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=fisher_output.reasoning)
+    fisher_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Wrap results in a single message
     message = HumanMessage(content=json.dumps(fisher_analysis), name=agent_id)
@@ -515,67 +528,19 @@ def generate_fisher_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> PhilFisherSignal:
+) -> BaseSignal:
     """
     Generates a JSON signal in the style of Phil Fisher.
     """
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a Phil Fisher AI agent, making investment decisions using his principles:
-  
-              1. Emphasize long-term growth potential and quality of management.
-              2. Focus on companies investing in R&D for future products/services.
-              3. Look for strong profitability and consistent margins.
-              4. Willing to pay more for exceptional companies but still mindful of valuation.
-              5. Rely on thorough research (scuttlebutt) and thorough fundamental checks.
-              
-              When providing your reasoning, be thorough and specific by:
-              1. Discussing the company's growth prospects in detail with specific metrics and trends
-              2. Evaluating management quality and their capital allocation decisions
-              3. Highlighting R&D investments and product pipeline that could drive future growth
-              4. Assessing consistency of margins and profitability metrics with precise numbers
-              5. Explaining competitive advantages that could sustain growth over 3-5+ years
-              6. Using Phil Fisher's methodical, growth-focused, and long-term oriented voice
-              
-              For example, if bullish: "This company exhibits the sustained growth characteristics we seek, with revenue increasing at 18% annually over five years. Management has demonstrated exceptional foresight by allocating 15% of revenue to R&D, which has produced three promising new product lines. The consistent operating margins of 22-24% indicate pricing power and operational efficiency that should continue to..."
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-              For example, if bearish: "Despite operating in a growing industry, management has failed to translate R&D investments (only 5% of revenue) into meaningful new products. Margins have fluctuated between 10-15%, showing inconsistent operational execution. The company faces increasing competition from three larger competitors with superior distribution networks. Given these concerns about long-term growth sustainability..."
-              
-              You must output a JSON object with:
-                - "signal": "bullish" or "bearish" or "neutral"
-                - "confidence": a float between 0 and 100
-                - "reasoning": a detailed explanation
-              """,
-            ),
-            (
-                "human",
-                """Based on the following analysis, create a Phil Fisher-style investment signal.
-
-              Analysis Data for {ticker}:
-              {analysis_data}
-
-              Return the trading signal in this JSON format:
-              {{
-                "signal": "bullish/bearish/neutral",
-                "confidence": float (0-100),
-                "reasoning": "string"
-              }}
-              """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    def create_default_signal():
-        return PhilFisherSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis, defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=PhilFisherSignal,
+        pydantic_model=BaseSignal,
         state=state,
         agent_name=agent_id,
-        default_factory=create_default_signal,
+        default_factory=_default,
     )

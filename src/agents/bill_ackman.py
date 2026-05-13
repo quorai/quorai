@@ -3,18 +3,30 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class BillAckmanSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Bill Ackman. You run a concentrated, high-conviction, activist-oriented fund. Apply your framework:\n"
+    "\n"
+    "1. Activism catalyst first: what specific action can unlock value — board change, cost cuts, spin-off, buyback program, CEO replacement? Ackman needs an identifiable lever.\n"
+    "2. Business quality is table stakes: you only activate on high-quality businesses — brands, toll-roads, monopolies — not broken turnarounds.\n"
+    "3. Concentrated position sizing: you would only take a position large enough to influence outcomes. Is this business worth a 15-25% portfolio position?\n"
+    "4. Free cash flow is the engine: FCFE must support the activism thesis — without FCF, you can't buy back stock or pay down debt after taking a stake.\n"
+    "5. Management accountability: is current management destroying or creating value? Ackman specifically looks for cases where replacing management or restructuring the board can re-rate the stock by 50-100%.\n"
+    "6. Short thesis (if bearish): you are not shy about public short campaigns when you see fraud, earnings manipulation, or fundamentally broken business models.\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Ackman\'s confident, public-facing, combative tone — one concrete fact, catalyst, or judgment per bullet. No prose paragraphs.\n'
+    "\n"
+    "Return signal: bullish, neutral, or bearish with 0-100 confidence."
+)
 
 
 def bill_ackman_agent(state: AgentState, agent_id: str = "bill_ackman_agent"):
@@ -27,10 +39,8 @@ def bill_ackman_agent(state: AgentState, agent_id: str = "bill_ackman_agent"):
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    analysis_data = {}
-    ackman_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -79,25 +89,26 @@ def bill_ackman_agent(state: AgentState, agent_id: str = "bill_ackman_agent"):
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {"signal": signal, "score": total_score, "max_score": max_possible_score, "quality_analysis": quality_analysis, "balance_sheet_analysis": balance_sheet_analysis, "activism_analysis": activism_analysis, "valuation_analysis": valuation_analysis}
+        ticker_analysis = {"signal": signal, "score": total_score, "max_score": max_possible_score, "quality_analysis": quality_analysis, "balance_sheet_analysis": balance_sheet_analysis, "activism_analysis": activism_analysis, "valuation_analysis": valuation_analysis}
 
         progress.update_status(agent_id, ticker, "Generating Bill Ackman analysis")
         ackman_output = generate_ackman_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        ackman_analysis[ticker] = {"signal": ackman_output.signal, "confidence": ackman_output.confidence, "reasoning": ackman_output.reasoning}
-
         progress.update_status(agent_id, ticker, "Done", analysis=ackman_output.reasoning)
+        return {"signal": ackman_output.signal, "confidence": ackman_output.confidence, "reasoning": ackman_output.reasoning}
+
+    ackman_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Wrap results in a single message for the chain
     message = HumanMessage(content=json.dumps(ackman_analysis), name=agent_id)
 
     # Show reasoning if requested
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(ackman_analysis, "Bill Ackman Agent")
 
     # Add signals to the overall state
@@ -334,61 +345,21 @@ def generate_ackman_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> BillAckmanSignal:
+) -> BaseSignal:
     """
     Generates investment decisions in the style of Bill Ackman.
     Includes more explicit references to brand strength, activism potential,
     catalysts, and management changes in the system prompt.
     """
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are Bill Ackman. You run a concentrated, high-conviction, activist-oriented fund. Apply your framework:
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-            1. Activism catalyst first: what specific action can unlock value — board change, cost cuts, spin-off, buyback program, CEO replacement? Ackman needs an identifiable lever.
-            2. Business quality is table stakes: you only activate on high-quality businesses — brands, toll-roads, monopolies — not broken turnarounds.
-            3. Concentrated position sizing: you would only take a position large enough to influence outcomes. Is this business worth a 15-25% portfolio position?
-            4. Free cash flow is the engine: FCFE must support the activism thesis — without FCF, you can't buy back stock or pay down debt after taking a stake.
-            5. Management accountability: is current management destroying or creating value? Ackman specifically looks for cases where replacing management or restructuring the board can re-rate the stock by 50-100%.
-            6. Short thesis (if bearish): you are not shy about public short campaigns when you see fraud, earnings manipulation, or fundamentally broken business models.
-
-            In your reasoning:
-            - Lead with the activism angle: what is the specific catalyst and who is the likely change agent?
-            - Quantify the prize: what is the implied share price if the activism succeeds?
-            - Assess execution risk: how likely is management/board to resist, and can Ackman win?
-            - Use a confident, public-facing, sometimes combative tone — Ackman's letters are meant to move markets.
-
-            Return signal: bullish, neutral, or bearish with 0-100 confidence.
-            """,
-            ),
-            (
-                "human",
-                """Based on the following analysis, create an Ackman-style investment signal.
-
-            Analysis Data for {ticker}:
-            {analysis_data}
-
-            Return your output in strictly valid JSON:
-            {{
-              "signal": "bullish" | "bearish" | "neutral",
-              "confidence": float (0-100),
-              "reasoning": "string"
-            }}
-            """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    def create_default_bill_ackman_signal():
-        return BillAckmanSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis, defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=BillAckmanSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_bill_ackman_signal,
+        default_factory=_default,
     )

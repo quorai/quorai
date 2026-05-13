@@ -115,3 +115,33 @@ def test_risk_management_agent_excluded():
     result = _aggregate_to_groups(signals, ["AAPL"])
     # risk_management_agent must not create a group entry
     assert "risk_management" not in result["AAPL"]
+
+
+def test_agent_weights_shift_stance_proportionally():
+    # warren_buffett: bullish 50 × weight 2.0 = 100 effective
+    # michael_burry: bearish 50 × weight 0.5 = 25 effective
+    # Both in deep_value group. Weighted stance = (100 - 25) / 125 = 0.6 → bullish
+    signals = _make_signals(
+        [
+            ("ben_graham", "bullish", 50.0, "cheap stock"),
+            ("michael_burry", "bearish", 50.0, "overleveraged"),
+        ]
+    )
+    weights = {"ben_graham": 2.0, "michael_burry": 0.5}
+    result = _aggregate_to_groups(signals, ["AAPL"], agent_weights=weights)
+    dv = result["AAPL"]["deep_value"]
+    assert dv["signal"] == "bullish"
+
+
+def test_agent_weights_none_equals_uniform():
+    signals = _make_signals(
+        [
+            ("ben_graham", "bullish", 80.0, "cheap"),
+            ("michael_burry", "bullish", 70.0, "discount"),
+        ]
+    )
+    uniform_weights = {"ben_graham": 1.0, "michael_burry": 1.0}
+    result_none = _aggregate_to_groups(signals, ["AAPL"], agent_weights=None)
+    result_uniform = _aggregate_to_groups(signals, ["AAPL"], agent_weights=uniform_weights)
+    assert result_none["AAPL"]["deep_value"]["signal"] == result_uniform["AAPL"]["deep_value"]["signal"]
+    assert result_none["AAPL"]["deep_value"]["confidence"] == pytest.approx(result_uniform["AAPL"]["deep_value"]["confidence"], abs=0.1)

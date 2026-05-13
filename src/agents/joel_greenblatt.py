@@ -3,18 +3,39 @@ from datetime import datetime, timedelta
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class JoelGreenblattSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Joel Greenblatt. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Framework:\n"
+    "- Magic Formula: high ROIC (quality) AND high earnings yield (cheap) = rank high → buy\n"
+    "- Special situations: insider buying, earnings acceleration, restructuring = catalyst\n"
+    "- Capital returns: strong FCF yield and asset-light = ability to buy back stock or pay dividends\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: top Magic Formula rank (high ROIC + cheap) AND at least one catalyst\n"
+    "- Bearish: low ROIC OR expensive OR heavy insider selling with declining earnings\n"
+    "- Neutral: good one leg of formula but not the other, or no catalyst\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: Top Magic Formula rank + insider buying + strong FCF return\n"
+    "- 70-89%: Good Magic Formula score with one catalyst\n"
+    "- 50-69%: Average formula rank, mixed catalysts\n"
+    "- 30-49%: Weak formula (cheap but low ROIC, or high ROIC but expensive)\n"
+    "- 10-29%: Poor formula rank + negative catalysts\n"
+    "\n"
+    "Use Greenblatt's vocabulary: Magic Formula, earnings yield, ROIC, special situation, spin-off, catalyst, good business at a cheap price.\n"
+    'Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one fact or judgment under ~100 chars. Stay in Greenblatt\'s Magic Formula voice. Do not invent data. Return JSON only.'
+)
 
 
 def joel_greenblatt_agent(state: AgentState, agent_id: str = "joel_greenblatt_agent"):
@@ -26,10 +47,7 @@ def joel_greenblatt_agent(state: AgentState, agent_id: str = "joel_greenblatt_ag
 
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
 
-    analysis_data = {}
-    greenblatt_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -69,7 +87,7 @@ def joel_greenblatt_agent(state: AgentState, agent_id: str = "joel_greenblatt_ag
         total_score = magic_formula["score"] + special_situations["score"] + capital_returns["score"]
         max_possible_score = magic_formula["max_score"] + special_situations["max_score"] + capital_returns["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -82,22 +100,23 @@ def joel_greenblatt_agent(state: AgentState, agent_id: str = "joel_greenblatt_ag
         progress.update_status(agent_id, ticker, "Generating Joel Greenblatt analysis")
         greenblatt_output = generate_greenblatt_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        greenblatt_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=greenblatt_output.reasoning)
+        return {
             "signal": greenblatt_output.signal,
             "confidence": greenblatt_output.confidence,
             "reasoning": greenblatt_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=greenblatt_output.reasoning)
+    greenblatt_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(greenblatt_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(greenblatt_analysis, agent_id)
 
     state["data"]["analyst_signals"][agent_id] = greenblatt_analysis
@@ -294,7 +313,7 @@ def generate_greenblatt_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str = "joel_greenblatt_agent",
-) -> JoelGreenblattSignal:
+) -> BaseSignal:
     """Get investment decision from LLM in Joel Greenblatt's voice."""
     facts = {
         "score": analysis_data.get("score"),
@@ -305,52 +324,14 @@ def generate_greenblatt_output(
         "market_cap": analysis_data.get("market_cap"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Joel Greenblatt. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Framework:\n"
-                "- Magic Formula: high ROIC (quality) AND high earnings yield (cheap) = rank high → buy\n"
-                "- Special situations: insider buying, earnings acceleration, restructuring = catalyst\n"
-                "- Capital returns: strong FCF yield and asset-light = ability to buy back stock or pay dividends\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: top Magic Formula rank (high ROIC + cheap) AND at least one catalyst\n"
-                "- Bearish: low ROIC OR expensive OR heavy insider selling with declining earnings\n"
-                "- Neutral: good one leg of formula but not the other, or no catalyst\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: Top Magic Formula rank + insider buying + strong FCF return\n"
-                "- 70-89%: Good Magic Formula score with one catalyst\n"
-                "- 50-69%: Average formula rank, mixed catalysts\n"
-                "- 30-49%: Weak formula (cheap but low ROIC, or high ROIC but expensive)\n"
-                "- 10-29%: Poor formula rank + negative catalysts\n"
-                "\n"
-                "Use Greenblatt's vocabulary: Magic Formula, earnings yield, ROIC, special situation, spin-off, catalyst, good business at a cheap price.\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     def _default():
-        return JoelGreenblattSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=JoelGreenblattSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

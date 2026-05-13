@@ -9,12 +9,29 @@ from src.agents._data_bundle import AgentDataBundle
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class CharlieMungerSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Charlie Munger. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Apply your multidisciplinary lattice of mental models:\n"
+    "- Inversion: ask 'what would make this a terrible investment?' — avoid that\n"
+    "- Circle of competence: only where you truly understand the business model\n"
+    "- Moat quality: durable, not just present — can competitors replicate it in 10 years?\n"
+    "- Management as operators vs capital allocators: Munger cares more about capital allocation\n"
+    "- Lollapalooza effect: multiple positive factors reinforcing each other = high conviction\n"
+    "- Psychological biases: is the market mis-pricing this due to recency, anchoring, or fear?\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: business inside circle of competence, multiple reinforcing moat signals, excellent capital allocation\n"
+    "- Bearish: outside circle of competence, or moat is fragile, or management allocates capital poorly\n"
+    "- Neutral: good business but valuation already reflects it, or mixed competence\n"
+    "\n"
+    "Use Munger's vocabulary: inversion, latticework, lollapalooza, circle of competence, capital allocation, moat.\n"
+    'Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one fact or judgment under ~100 chars. Stay in Munger\'s inversion/lollapalooza voice. Use the provided confidence exactly; do not change it. Return JSON only.'
+)
 
 
 def charlie_munger_agent(state: AgentState, agent_id: str = "charlie_munger_agent"):
@@ -26,10 +43,8 @@ def charlie_munger_agent(state: AgentState, agent_id: str = "charlie_munger_agen
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    analysis_data = {}
-    munger_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -90,7 +105,7 @@ def charlie_munger_agent(state: AgentState, agent_id: str = "charlie_munger_agen
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_possible_score,
@@ -103,17 +118,18 @@ def charlie_munger_agent(state: AgentState, agent_id: str = "charlie_munger_agen
         }
 
         progress.update_status(agent_id, ticker, "Generating Charlie Munger analysis")
-        munger_output = generate_munger_output(ticker=ticker, analysis_data=analysis_data[ticker], state=state, agent_id=agent_id, confidence_hint=compute_confidence(analysis_data[ticker], signal))
-
-        munger_analysis[ticker] = {"signal": munger_output.signal, "confidence": munger_output.confidence, "reasoning": munger_output.reasoning}
+        munger_output = generate_munger_output(ticker=ticker, analysis_data=ticker_analysis, state=state, agent_id=agent_id, confidence_hint=compute_confidence(ticker_analysis, signal))
 
         progress.update_status(agent_id, ticker, "Done", analysis=munger_output.reasoning)
+        return {"signal": munger_output.signal, "confidence": munger_output.confidence, "reasoning": munger_output.reasoning}
+
+    munger_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Wrap results in a single message for the chain
     message = HumanMessage(content=json.dumps(munger_analysis), name=agent_id)
 
     # Show reasoning if requested
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(munger_analysis, "Charlie Munger Agent")
 
     progress.update_status(agent_id, None, "Done")
@@ -729,29 +745,13 @@ def generate_munger_output(
     state: AgentState,
     agent_id: str,
     confidence_hint: int,
-) -> CharlieMungerSignal:
+) -> BaseSignal:
     facts_bundle = make_munger_facts_bundle(analysis_data)
     template = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                "You are Charlie Munger. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Apply your multidisciplinary lattice of mental models:\n"
-                "- Inversion: ask 'what would make this a terrible investment?' — avoid that\n"
-                "- Circle of competence: only where you truly understand the business model\n"
-                "- Moat quality: durable, not just present — can competitors replicate it in 10 years?\n"
-                "- Management as operators vs capital allocators: Munger cares more about capital allocation\n"
-                "- Lollapalooza effect: multiple positive factors reinforcing each other = high conviction\n"
-                "- Psychological biases: is the market mis-pricing this due to recency, anchoring, or fear?\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: business inside circle of competence, multiple reinforcing moat signals, excellent capital allocation\n"
-                "- Bearish: outside circle of competence, or moat is fragile, or management allocates capital poorly\n"
-                "- Neutral: good business but valuation already reflects it, or mixed competence\n"
-                "\n"
-                "Use Munger's vocabulary: inversion, latticework, lollapalooza, circle of competence, capital allocation, moat.\n"
-                "Keep reasoning under 150 characters. Use the provided confidence exactly; do not change it. Return JSON only.",
+                _PERSONA,
             ),
             (
                 "human",
@@ -762,7 +762,7 @@ def generate_munger_output(
                 "{{\n"  # escaped {
                 '  "signal": "bullish" | "bearish" | "neutral",\n'
                 f'  "confidence": {confidence_hint},\n'
-                '  "reasoning": "short justification"\n'
+                '  "reasoning": "short bullet list, 2–3 bullets preferred, max 5"\n'
                 "}}",
             ),  # escaped }
         ]
@@ -777,11 +777,11 @@ def generate_munger_output(
     )
 
     def _default():
-        return CharlieMungerSignal(signal="neutral", confidence=confidence_hint, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=confidence_hint, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=CharlieMungerSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

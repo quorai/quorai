@@ -36,6 +36,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=None, help="LLM temperature override")
     parser.add_argument("--dry-run", action="store_true", dest="dry_run", help="Print decisions but do not submit orders")
     parser.add_argument("--show-reasoning", action="store_true", dest="show_reasoning", help="Print each agent's reasoning and the debate summaries")
+    parser.add_argument("--use-regime-selection", action="store_true", dest="use_regime_selection", help="Narrow analysts to the regime-appropriate set using SPY market data")
+    parser.add_argument("--use-conviction-weights", action="store_true", dest="use_conviction_weights", help="Apply per-agent conviction weights from src/feedback/weights.json (requires prior backtest run with signal log)")
+    parser.add_argument("--no-signal-log", action="store_false", dest="enable_signal_log", help="Disable writing the per-agent signal JSONL (logs/signals-live-YYYY-MM-DD.jsonl)")
+    parser.set_defaults(enable_signal_log=True)
+    parser.add_argument(
+        "--agent-model",
+        action="append",
+        dest="agent_models",
+        metavar="AGENT=model[:PROVIDER]",
+        help=(
+            "Override model for a specific agent. Repeatable. "
+            "Format: AGENT_KEY=model_slug[:PROVIDER] — provider defaults to OpenRouter. "
+            "Use '*' as agent key for a wildcard fallback. "
+            "Example: --agent-model portfolio_manager=anthropic/claude-sonnet-4:Anthropic "
+            "--agent-model '*=deepseek/deepseek-chat-v3.1'. "
+            "Also reads QUORAI_AGENT_MODELS_JSON env var (JSON dict)."
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="Skip market-open check (useful for development/testing)")
     parser.add_argument("--confirm", action="store_true", help="Auto-confirm without interactive prompt")
     parser.add_argument(
@@ -101,6 +119,10 @@ def main() -> None:
 
     idempotency_guard = IdempotencyGuard(journal=journal, approver=_approver)
 
+    from src.llm.request import RunRequest
+
+    run_request = RunRequest.from_agent_model_args(agent_model_args=getattr(args, "agent_models", None) or [])
+
     runner = LiveRunner(
         tickers=tickers,
         model_name=args.model,
@@ -110,10 +132,14 @@ def main() -> None:
         llm_temperature=args.temperature,
         dry_run=args.dry_run,
         show_reasoning=args.show_reasoning,
+        use_regime_selection=args.use_regime_selection,
+        use_conviction_weights=args.use_conviction_weights,
+        enable_signal_log=args.enable_signal_log,
         broker=broker,
         journal=journal,
         risk_gate=risk_gate,
         idempotency_guard=idempotency_guard,
+        request=run_request,
     )
 
     # Pre-flight: skip on non-trading days
@@ -126,7 +152,6 @@ def main() -> None:
 
     # Pre-flight: check Telegram command inbox
     from src.notifications.command_store import CommandStore, parse_directive
-    from src.notifications.telegram import TelegramClient
 
     log = logging.getLogger(__name__)
     command_store = CommandStore()
@@ -189,6 +214,15 @@ def main() -> None:
         price = latest_prices.get(ticker, float("nan"))
         print(f"{ticker:<10} {action:<8} {qty:>10.3f} {price:>10.2f}")
     print()
+
+    # Signal log path
+    if runner.signal_log_path:
+        print(f"Signal log: {runner.signal_log_path}")
+
+    # Token usage summary
+    tok = runner.token_summary()
+    if tok:
+        print(f"Tokens: {tok['calls']} calls, {tok['input_tokens']} in / {tok['output_tokens']} out")
 
     # Apply only_sells filter (one-shot)
     if active.directive == "only_sells":
@@ -278,6 +312,10 @@ def main() -> None:
             price = latest_prices.get(ticker, float("nan"))
             result = execution_results.get(ticker, "—")
             lines.append(f"{ticker} | {action} | {qty:.3f} | ${price:.2f} | {result}")
+        tok = runner.token_summary()
+        if tok:
+            lines.append("")
+            lines.append(f"_Tokens: {tok['calls']} calls · {tok['input_tokens']} in / {tok['output_tokens']} out_")
         try:
             tg_notify.send_message("\n".join(lines))
         except Exception as exc:

@@ -4,19 +4,41 @@ import json
 import math
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import prices_to_df
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class CliffAsnessSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Cliff Asness of AQR Capital. Decide bullish, bearish, or neutral using only the provided factor scores.\n"
+    "\n"
+    "AQR factor framework (all four matter equally):\n"
+    "- Value: cheap on P/E, P/B, FCF yield, EV/EBITDA → bullish tilt\n"
+    "- Momentum (12-1): positive 12-month price momentum, skip last month → bullish tilt\n"
+    "- Quality: high ROIC, strong margins, stable earnings → bullish tilt\n"
+    "- Low-vol: lower realized volatility → higher factor score\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: majority of factors are positive (value + momentum + quality + low-vol)\n"
+    "- Bearish: majority of factors are negative (expensive + negative momentum + low quality + high vol)\n"
+    "- Neutral: mixed factor signals\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: All four factors strongly aligned\n"
+    "- 70-89%: Three factors positive\n"
+    "- 50-69%: Two factors positive (or all weak)\n"
+    "- 30-49%: Only one factor positive\n"
+    "- 10-29%: All factors negative\n"
+    "\n"
+    "Use AQR vocabulary: factor premium, value spread, momentum signal, quality tilt, low-vol anomaly, factor exposure.\n"
+    'Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one fact or judgment under ~100 chars. Stay in Cliff Asness\'s AQR/factor voice. Do not invent data. Return JSON only.'
+)
 
 
 def cliff_asness_agent(state: AgentState, agent_id: str = "cliff_asness_agent"):
@@ -29,10 +51,7 @@ def cliff_asness_agent(state: AgentState, agent_id: str = "cliff_asness_agent"):
     # 14 months to compute 12-1 momentum (skip most recent month)
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=430)).date().isoformat()
 
-    analysis_data = {}
-    asness_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -70,7 +89,7 @@ def cliff_asness_agent(state: AgentState, agent_id: str = "cliff_asness_agent"):
         total_score = value_factor["score"] + momentum_factor["score"] + quality_factor["score"] + low_vol_factor["score"]
         max_possible_score = value_factor["max_score"] + momentum_factor["max_score"] + quality_factor["max_score"] + low_vol_factor["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -84,22 +103,23 @@ def cliff_asness_agent(state: AgentState, agent_id: str = "cliff_asness_agent"):
         progress.update_status(agent_id, ticker, "Generating Cliff Asness analysis")
         asness_output = generate_asness_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        asness_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=asness_output.reasoning)
+        return {
             "signal": asness_output.signal,
             "confidence": asness_output.confidence,
             "reasoning": asness_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=asness_output.reasoning)
+    asness_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(asness_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(asness_analysis, agent_id)
 
     state["data"]["analyst_signals"][agent_id] = asness_analysis
@@ -303,7 +323,7 @@ def generate_asness_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str = "cliff_asness_agent",
-) -> CliffAsnessSignal:
+) -> BaseSignal:
     """Get investment decision from LLM in Cliff Asness's AQR voice."""
     facts = {
         "score": analysis_data.get("score"),
@@ -315,53 +335,14 @@ def generate_asness_output(
         "market_cap": analysis_data.get("market_cap"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Cliff Asness of AQR Capital. Decide bullish, bearish, or neutral using only the provided factor scores.\n"
-                "\n"
-                "AQR factor framework (all four matter equally):\n"
-                "- Value: cheap on P/E, P/B, FCF yield, EV/EBITDA → bullish tilt\n"
-                "- Momentum (12-1): positive 12-month price momentum, skip last month → bullish tilt\n"
-                "- Quality: high ROIC, strong margins, stable earnings → bullish tilt\n"
-                "- Low-vol: lower realized volatility → higher factor score\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: majority of factors are positive (value + momentum + quality + low-vol)\n"
-                "- Bearish: majority of factors are negative (expensive + negative momentum + low quality + high vol)\n"
-                "- Neutral: mixed factor signals\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: All four factors strongly aligned\n"
-                "- 70-89%: Three factors positive\n"
-                "- 50-69%: Two factors positive (or all weak)\n"
-                "- 30-49%: Only one factor positive\n"
-                "- 10-29%: All factors negative\n"
-                "\n"
-                "Use AQR vocabulary: factor premium, value spread, momentum signal, quality tilt, low-vol anomaly, factor exposure.\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     def _default():
-        return CliffAsnessSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=CliffAsnessSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

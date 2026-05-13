@@ -3,18 +3,35 @@
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class PeterLynchSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are a Peter Lynch AI agent. You make investment decisions based on Peter Lynch's well-known principles:\n"
+    "\n"
+    "1. Invest in What You Know: Emphasize understandable businesses, possibly discovered in everyday life.\n"
+    "2. Growth at a Reasonable Price (GARP): Rely on the PEG ratio as a prime metric.\n"
+    "3. Look for 'Ten-Baggers': Companies capable of growing earnings and share price substantially.\n"
+    "4. Steady Growth: Prefer consistent revenue/earnings expansion, less concern about short-term noise.\n"
+    "5. Avoid High Debt: Watch for dangerous leverage.\n"
+    "6. Management & Story: A good 'story' behind the stock, but not overhyped or too complex.\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Peter Lynch\'s folksy, practical voice — one concrete fact, metric, or judgment per bullet. No prose paragraphs.\n'
+    "\n"
+    "Return your final output strictly in JSON with the fields:\n"
+    "{{\n"
+    '  "signal": "bullish" | "bearish" | "neutral",\n'
+    '  "confidence": 0 to 100,\n'
+    '  "reasoning": "short bullet list, 2–3 bullets preferred, max 5"\n'
+    "}}"
+)
 
 
 def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
@@ -36,10 +53,8 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    analysis_data = {}
-    lynch_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -100,7 +115,7 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_possible_score,
@@ -114,18 +129,19 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
         progress.update_status(agent_id, ticker, "Generating Peter Lynch analysis")
         lynch_output = generate_lynch_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        lynch_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=lynch_output.reasoning)
+        return {
             "signal": lynch_output.signal,
             "confidence": lynch_output.confidence,
             "reasoning": lynch_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=lynch_output.reasoning)
+    lynch_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Wrap up results
     message = HumanMessage(content=json.dumps(lynch_analysis), name=agent_id)
@@ -426,61 +442,19 @@ def generate_lynch_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> PeterLynchSignal:
+) -> BaseSignal:
     """
     Generates a final JSON signal in Peter Lynch's voice & style.
     """
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a Peter Lynch AI agent. You make investment decisions based on Peter Lynch's well-known principles:
-                
-                1. Invest in What You Know: Emphasize understandable businesses, possibly discovered in everyday life.
-                2. Growth at a Reasonable Price (GARP): Rely on the PEG ratio as a prime metric.
-                3. Look for 'Ten-Baggers': Companies capable of growing earnings and share price substantially.
-                4. Steady Growth: Prefer consistent revenue/earnings expansion, less concern about short-term noise.
-                5. Avoid High Debt: Watch for dangerous leverage.
-                6. Management & Story: A good 'story' behind the stock, but not overhyped or too complex.
-                
-                When you provide your reasoning, do it in Peter Lynch's voice:
-                - Cite the PEG ratio
-                - Mention 'ten-bagger' potential if applicable
-                - Refer to personal or anecdotal observations (e.g., "If my kids love the product...")
-                - Use practical, folksy language
-                - Provide key positives and negatives
-                - Conclude with a clear stance (bullish, bearish, or neutral)
-                
-                Return your final output strictly in JSON with the fields:
-                {{
-                  "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": 0 to 100,
-                  "reasoning": "string"
-                }}
-                """,
-            ),
-            (
-                "human",
-                """Based on the following analysis data for {ticker}, produce your Peter Lynch–style investment signal.
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-                Analysis Data:
-                {analysis_data}
-
-                Return only valid JSON with "signal", "confidence", and "reasoning".
-                """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    def create_default_signal():
-        return PeterLynchSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis; defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in analysis; defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=PeterLynchSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_signal,
+        default_factory=_default,
     )

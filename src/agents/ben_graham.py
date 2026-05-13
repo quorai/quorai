@@ -4,18 +4,40 @@ import json
 import math
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class BenGrahamSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Benjamin Graham — the father of value investing. You use ONLY systematic, statistical, and quantitative criteria. No qualitative storytelling.\n"
+    "\n"
+    "Your strict criteria (Graham's actual rules):\n"
+    "1. Graham Number: stock must trade BELOW sqrt(22.5 × EPS × Book Value per Share). Stocks above Graham Number are automatic sells.\n"
+    "2. Net-net: ideally buy below 2/3 of NCAV (current assets minus all liabilities). This is the 'deep bargain bin' Graham loved.\n"
+    "3. Current ratio >= 2.0: Graham's minimum for financial strength. Below 1.5 is a red flag.\n"
+    "4. Debt-to-equity <= 1.0: conservative balance sheet is non-negotiable.\n"
+    "5. Earnings stability: positive EPS for each of the past 5+ years. One bad year is disqualifying.\n"
+    "6. P/E <= 15: Graham refuses to pay growth premiums. Overpay and margin of safety evaporates.\n"
+    "7. Dividend record: at least some dividend history shows the business generates real cash.\n"
+    "\n"
+    "Graham's rules explicitly exclude:\n"
+    "- Growth projections or earnings forecasts — only PROVEN historical metrics\n"
+    "- Qualitative factors like management quality, market position, or industry trends\n"
+    "- Any stock without a calculable margin of safety\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: trading below Graham Number AND strong balance sheet AND stable earnings\n"
+    "- Bearish: above Graham Number OR weak current ratio OR leveraged OR loss years\n"
+    "- Neutral: Graham Number close to market price, or borderline metrics\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Graham\'s dry, quantitative, Mr. Market voice — one concrete threshold, ratio, or verdict per bullet. No prose paragraphs.'
+)
 
 
 def ben_graham_agent(state: AgentState, agent_id: str = "ben_graham_agent"):
@@ -31,10 +53,7 @@ def ben_graham_agent(state: AgentState, agent_id: str = "ben_graham_agent"):
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
 
-    analysis_data = {}
-    graham_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -83,25 +102,26 @@ def ben_graham_agent(state: AgentState, agent_id: str = "ben_graham_agent"):
         else:
             signal = "neutral"
 
-        analysis_data[ticker] = {"signal": signal, "score": total_score, "max_score": max_possible_score, "earnings_analysis": earnings_analysis, "strength_analysis": strength_analysis, "valuation_analysis": valuation_analysis}
+        ticker_analysis = {"signal": signal, "score": total_score, "max_score": max_possible_score, "earnings_analysis": earnings_analysis, "strength_analysis": strength_analysis, "valuation_analysis": valuation_analysis}
 
         progress.update_status(agent_id, ticker, "Generating Ben Graham analysis")
         graham_output = generate_graham_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        graham_analysis[ticker] = {"signal": graham_output.signal, "confidence": graham_output.confidence, "reasoning": graham_output.reasoning}
-
         progress.update_status(agent_id, ticker, "Done", analysis=graham_output.reasoning)
+        return {"signal": graham_output.signal, "confidence": graham_output.confidence, "reasoning": graham_output.reasoning}
+
+    graham_analysis = parallel_per_ticker(tickers, _analyze)
 
     # Wrap results in a single message for the chain
     message = HumanMessage(content=json.dumps(graham_analysis), name=agent_id)
 
     # Optionally display reasoning
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(graham_analysis, "Ben Graham Agent")
 
     # Store signals in the overall state
@@ -302,68 +322,21 @@ def generate_graham_output(
     analysis_data: dict[str, any],
     state: AgentState,
     agent_id: str,
-) -> BenGrahamSignal:
+) -> BaseSignal:
     """
     Generates an investment decision in the style of Benjamin Graham:
     - Value emphasis, margin of safety, net-nets, conservative balance sheet, stable earnings.
     - Return the result in a JSON structure: { signal, confidence, reasoning }.
     """
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are Benjamin Graham — the father of value investing. You use ONLY systematic, statistical, and quantitative criteria. No qualitative storytelling.
-
-            Your strict criteria (Graham's actual rules):
-            1. Graham Number: stock must trade BELOW sqrt(22.5 × EPS × Book Value per Share). Stocks above Graham Number are automatic sells.
-            2. Net-net: ideally buy below 2/3 of NCAV (current assets minus all liabilities). This is the 'deep bargain bin' Graham loved.
-            3. Current ratio >= 2.0: Graham's minimum for financial strength. Below 1.5 is a red flag.
-            4. Debt-to-equity <= 1.0: conservative balance sheet is non-negotiable.
-            5. Earnings stability: positive EPS for each of the past 5+ years. One bad year is disqualifying.
-            6. P/E <= 15: Graham refuses to pay growth premiums. Overpay and margin of safety evaporates.
-            7. Dividend record: at least some dividend history shows the business generates real cash.
-
-            Graham's rules explicitly exclude:
-            - Growth projections or earnings forecasts — only PROVEN historical metrics
-            - Qualitative factors like management quality, market position, or industry trends
-            - Any stock without a calculable margin of safety
-
-            Signal rules:
-            - Bullish: trading below Graham Number AND strong balance sheet AND stable earnings
-            - Bearish: above Graham Number OR weak current ratio OR leveraged OR loss years
-            - Neutral: Graham Number close to market price, or borderline metrics
-
-            Use Graham's dry, quantitative, Mr. Market voice. Cite specific thresholds.
-            """,
-            ),
-            (
-                "human",
-                """Based on the following analysis, create a Graham-style investment signal:
-
-            Analysis Data for {ticker}:
-            {analysis_data}
-
-            Return JSON exactly in this format:
-            {{
-              "signal": "bullish" or "bearish" or "neutral",
-              "confidence": float (0-100),
-              "reasoning": "string"
-            }}
-            """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    def create_default_ben_graham_signal():
-        return BenGrahamSignal(signal="neutral", confidence=0.0, reasoning="Error in generating analysis; defaulting to neutral.")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Error in generating analysis; defaulting to neutral.")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=BenGrahamSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_ben_graham_signal,
+        default_factory=_default,
     )

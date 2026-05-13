@@ -4,20 +4,43 @@ import json
 import math
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.agents.technicals import calculate_atr, calculate_ema, safe_float
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import prices_to_df
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class EdSeykotaSignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are Ed Seykota, pioneer of systematic trend-following. Decide bullish, bearish, or neutral using only the provided facts.\n"
+    "\n"
+    "Your rules:\n"
+    "- 'The trend is your friend until the bend at the end.' — price above 200-MA = ride it\n"
+    "- Donchian breakout to new highs = buy signal; breakdown to new lows = exit/short\n"
+    "- Trend strength (momentum) must confirm direction — no trend = no trade\n"
+    "- Size by volatility: calm markets allow larger positions; choppy = stand aside\n"
+    "- Cut losers short; let winners run — never average down\n"
+    "\n"
+    "Signal rules:\n"
+    "- Bullish: uptrend confirmed (price > MA) + Donchian upper zone + positive momentum\n"
+    "- Bearish: downtrend (price < MA) + Donchian lower zone + negative momentum\n"
+    "- Neutral: no clear trend, choppy range, or mixed signals\n"
+    "\n"
+    "Confidence scale:\n"
+    "- 90-100%: All trend signals aligned, breakout confirmed, low vol\n"
+    "- 70-89%: Strong trend with confirmation\n"
+    "- 50-69%: Trend present but weak or consolidating\n"
+    "- 30-49%: Mixed or early-stage signals\n"
+    "- 10-29%: Downtrend or breakdown confirmed\n"
+    "\n"
+    "Use Seykota's vocabulary: trend, breakout, cut your losses, ride the trend, whipsaw, position sizing.\n"
+    'Write reasoning as a short bullet list (2–3 bullets preferred, max 5). Each bullet: "- " + one fact or judgment under ~100 chars. Stay in Ed Seykota\'s trend-following voice. Do not invent data. Return JSON only.'
+)
 
 
 def ed_seykota_agent(state: AgentState, agent_id: str = "ed_seykota_agent"):
@@ -30,10 +53,7 @@ def ed_seykota_agent(state: AgentState, agent_id: str = "ed_seykota_agent"):
     # 14 months for reliable 200-day MA and Donchian 52-week window
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=430)).date().isoformat()
 
-    analysis_data = {}
-    seykota_analysis = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching price data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -60,7 +80,7 @@ def ed_seykota_agent(state: AgentState, agent_id: str = "ed_seykota_agent"):
         total_score = trend_direction["score"] + trend_strength["score"] + donchian["score"] + vol_sizing["score"]
         max_possible_score = trend_direction["max_score"] + trend_strength["max_score"] + donchian["max_score"] + vol_sizing["max_score"]
 
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "ticker": ticker,
             "score": total_score,
             "max_score": max_possible_score,
@@ -73,22 +93,23 @@ def ed_seykota_agent(state: AgentState, agent_id: str = "ed_seykota_agent"):
         progress.update_status(agent_id, ticker, "Generating Ed Seykota analysis")
         seykota_output = generate_seykota_output(
             ticker=ticker,
-            analysis_data=analysis_data[ticker],
+            analysis_data=ticker_analysis,
             state=state,
             agent_id=agent_id,
         )
 
-        seykota_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=seykota_output.reasoning)
+        return {
             "signal": seykota_output.signal,
             "confidence": seykota_output.confidence,
             "reasoning": seykota_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=seykota_output.reasoning)
+    seykota_analysis = parallel_per_ticker(tickers, _analyze)
 
     message = HumanMessage(content=json.dumps(seykota_analysis), name=agent_id)
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(seykota_analysis, agent_id)
 
     state["data"]["analyst_signals"][agent_id] = seykota_analysis
@@ -273,7 +294,7 @@ def generate_seykota_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str = "ed_seykota_agent",
-) -> EdSeykotaSignal:
+) -> BaseSignal:
     """Get investment decision from LLM in Ed Seykota's voice."""
     facts = {
         "score": analysis_data.get("score"),
@@ -284,54 +305,14 @@ def generate_seykota_output(
         "vol_sizing": analysis_data.get("vol_sizing", {}).get("details"),
     }
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are Ed Seykota, pioneer of systematic trend-following. Decide bullish, bearish, or neutral using only the provided facts.\n"
-                "\n"
-                "Your rules:\n"
-                "- 'The trend is your friend until the bend at the end.' — price above 200-MA = ride it\n"
-                "- Donchian breakout to new highs = buy signal; breakdown to new lows = exit/short\n"
-                "- Trend strength (momentum) must confirm direction — no trend = no trade\n"
-                "- Size by volatility: calm markets allow larger positions; choppy = stand aside\n"
-                "- Cut losers short; let winners run — never average down\n"
-                "\n"
-                "Signal rules:\n"
-                "- Bullish: uptrend confirmed (price > MA) + Donchian upper zone + positive momentum\n"
-                "- Bearish: downtrend (price < MA) + Donchian lower zone + negative momentum\n"
-                "- Neutral: no clear trend, choppy range, or mixed signals\n"
-                "\n"
-                "Confidence scale:\n"
-                "- 90-100%: All trend signals aligned, breakout confirmed, low vol\n"
-                "- 70-89%: Strong trend with confirmation\n"
-                "- 50-69%: Trend present but weak or consolidating\n"
-                "- 30-49%: Mixed or early-stage signals\n"
-                "- 10-29%: Downtrend or breakdown confirmed\n"
-                "\n"
-                "Use Seykota's vocabulary: trend, breakout, cut your losses, ride the trend, whipsaw, position sizing.\n"
-                "Keep reasoning under 150 characters. Do not invent data. Return JSON only.",
-            ),
-            (
-                "human",
-                'Ticker: {ticker}\nFacts:\n{facts}\n\nReturn exactly:\n{{\n  "signal": "bullish" | "bearish" | "neutral",\n  "confidence": int,\n  "reasoning": "short justification"\n}}',
-            ),
-        ]
-    )
-
-    prompt = template.invoke(
-        {
-            "facts": json.dumps(facts, separators=(",", ":"), ensure_ascii=False),
-            "ticker": ticker,
-        }
-    )
+    prompt = build_persona_prompt(_PERSONA, facts, ticker)
 
     def _default():
-        return EdSeykotaSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
+        return BaseSignal(signal="neutral", confidence=50, reasoning="Insufficient data")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=EdSeykotaSignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
         default_factory=_default,

@@ -6,18 +6,26 @@ from datetime import datetime, timedelta
 import json
 
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents._data_bundle import AgentDataBundle
+from src.agents._prompts import build_persona_prompt
 from src.agents._signals import BaseSignal
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
-
-class MichaelBurrySignal(BaseSignal):
-    pass
+_PERSONA = (
+    "You are an AI agent emulating Dr. Michael J. Burry. Your mandate:\n"
+    "- Hunt for deep value in US equities using hard numbers (free cash flow, EV/EBIT, balance sheet)\n"
+    "- Be contrarian: hatred in the press can be your friend if fundamentals are solid\n"
+    "- Focus on downside first – avoid leveraged balance sheets\n"
+    "- Look for hard catalysts such as insider buying, buybacks, or asset sales\n"
+    "- Communicate in Burry's terse, data-driven style\n"
+    "\n"
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Burry\'s terse, number-focused style — one concrete metric or judgment per bullet. No prose paragraphs.'
+)
 
 
 def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"):
@@ -30,10 +38,7 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
     # We look one year back for insider trades / news flow
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
 
-    analysis_data: dict[str, dict] = {}
-    burry_analysis: dict[str, dict] = {}
-
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict:
         progress.update_status(agent_id, ticker, "Fetching financial data")
         bundle = AgentDataBundle.fetch(
             ticker,
@@ -92,7 +97,7 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         # ------------------------------------------------------------------
         # Collect data for LLM reasoning & output
         # ------------------------------------------------------------------
-        analysis_data[ticker] = {
+        ticker_analysis = {
             "signal": signal,
             "score": total_score,
             "max_score": max_score,
@@ -106,18 +111,19 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         progress.update_status(agent_id, ticker, "Generating LLM output")
         burry_output = _generate_burry_output(
             ticker=ticker,
-            analysis_data=analysis_data,
+            analysis_data={ticker: ticker_analysis},
             state=state,
             agent_id=agent_id,
         )
 
-        burry_analysis[ticker] = {
+        progress.update_status(agent_id, ticker, "Done", analysis=burry_output.reasoning)
+        return {
             "signal": burry_output.signal,
             "confidence": burry_output.confidence,
             "reasoning": burry_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=burry_output.reasoning)
+    burry_analysis = parallel_per_ticker(tickers, _analyze)
 
     # ----------------------------------------------------------------------
     # Return to the graph
@@ -297,59 +303,17 @@ def _generate_burry_output(
     analysis_data: dict,
     state: AgentState,
     agent_id: str,
-) -> MichaelBurrySignal:
+) -> BaseSignal:
     """Call the LLM to craft the final trading signal in Burry's voice."""
+    prompt = build_persona_prompt(_PERSONA, analysis_data, ticker)
 
-    template = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are an AI agent emulating Dr. Michael J. Burry. Your mandate:
-                - Hunt for deep value in US equities using hard numbers (free cash flow, EV/EBIT, balance sheet)
-                - Be contrarian: hatred in the press can be your friend if fundamentals are solid
-                - Focus on downside first – avoid leveraged balance sheets
-                - Look for hard catalysts such as insider buying, buybacks, or asset sales
-                - Communicate in Burry's terse, data‑driven style
-
-                When providing your reasoning, be thorough and specific by:
-                1. Start with the key metric(s) that drove your decision
-                2. Cite concrete numbers (e.g. "FCF yield 14.7%", "EV/EBIT 5.3")
-                3. Highlight risk factors and why they are acceptable (or not)
-                4. Mention relevant insider activity or contrarian opportunities
-                5. Use Burry's direct, number-focused communication style with minimal words
-                
-                For example, if bullish: "FCF yield 12.8%. EV/EBIT 6.2. Debt-to-equity 0.4. Net insider buying 25k shares. Market missing value due to overreaction to recent litigation. Strong buy."
-                For example, if bearish: "FCF yield only 2.1%. Debt-to-equity concerning at 2.3. Management diluting shareholders. Pass."
-                """,
-            ),
-            (
-                "human",
-                """Based on the following data, create the investment signal as Michael Burry would:
-
-                Analysis Data for {ticker}:
-                {analysis_data}
-
-                Return the trading signal in the following JSON format exactly:
-                {{
-                  "signal": "bullish" | "bearish" | "neutral",
-                  "confidence": float between 0 and 100,
-                  "reasoning": "string"
-                }}
-                """,
-            ),
-        ]
-    )
-
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
-
-    # Default fallback signal in case parsing fails
-    def create_default_michael_burry_signal():
-        return MichaelBurrySignal(signal="neutral", confidence=0.0, reasoning="Parsing error – defaulting to neutral")
+    def _default():
+        return BaseSignal(signal="neutral", confidence=0, reasoning="Parsing error – defaulting to neutral")
 
     return call_llm(
         prompt=prompt,
-        pydantic_model=MichaelBurrySignal,
+        pydantic_model=BaseSignal,
         agent_name=agent_id,
         state=state,
-        default_factory=create_default_michael_burry_signal,
+        default_factory=_default,
     )

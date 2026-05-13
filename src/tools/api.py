@@ -1,5 +1,6 @@
 import datetime
 import logging
+import os
 import random
 import threading
 import time
@@ -96,6 +97,7 @@ def _get_api_key(api_key: str | None) -> str:
 # unique (url, params) pair. Remaining threads wait and share the result.
 _inflight_lock = threading.Lock()
 _inflight: dict[tuple, tuple[threading.Event, list]] = {}
+_INFLIGHT_WAIT_TIMEOUT = float(os.environ.get("QUORAI_INFLIGHT_WAIT_TIMEOUT", "60"))
 
 
 def _execute_request(url: str, params: dict | None = None, max_retries: int = 3) -> requests.Response:
@@ -146,7 +148,9 @@ def _make_api_request(url: str, params: dict | None = None, max_retries: int = 3
             owner = True
 
     if not owner:
-        event.wait()
+        if not event.wait(timeout=_INFLIGHT_WAIT_TIMEOUT):
+            logger.warning("Inflight wait timed out for %r; making independent request", url)
+            return _execute_request(url, params, max_retries)
         outcome = result_holder[0]
         if isinstance(outcome, BaseException):
             raise outcome
@@ -181,9 +185,12 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
     try:
         import yfinance as yf
 
+        from src.tools._yfinance_fundamentals import _yf_semaphore
+
         # yfinance end_date is exclusive, so add one day
         end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d") + datetime.timedelta(days=1)
-        df = yf.download(ticker, start=start_date, end=end_dt.strftime("%Y-%m-%d"), progress=False, auto_adjust=True)
+        with _yf_semaphore:
+            df = yf.download(ticker, start=start_date, end=end_dt.strftime("%Y-%m-%d"), progress=False, auto_adjust=True)
         if df.empty:
             logger.warning("No price data for %s from yfinance", ticker)
             return []
@@ -600,6 +607,8 @@ def get_market_cap(
 
 def prices_to_df(prices: list[Price]) -> pd.DataFrame:
     """Convert prices to a DataFrame."""
+    if not prices:
+        return pd.DataFrame()
     df = pd.DataFrame([p.model_dump() for p in prices])
     df["Date"] = pd.to_datetime(df["time"])
     df.set_index("Date", inplace=True)

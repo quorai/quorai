@@ -8,6 +8,7 @@ import pandas as pd
 from src.graph.state import AgentState, show_agent_reasoning
 from src.tools.api import get_prices, prices_to_df
 from src.utils.api_key import get_api_key_from_state
+from src.utils.concurrency import parallel_per_ticker
 from src.utils.progress import progress
 
 
@@ -45,13 +46,10 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINNHUB_API_KEY")
-    # Initialize analysis for each ticker
-    technical_analysis = {}
 
-    for ticker in tickers:
+    def _analyze(ticker: str) -> dict | None:
         progress.update_status(agent_id, ticker, "Analyzing price data")
 
-        # Get the historical price data
         prices = get_prices(
             ticker=ticker,
             start_date=start_date,
@@ -61,9 +59,8 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
 
         if not prices:
             progress.update_status(agent_id, ticker, "Failed: No price data found")
-            continue
+            return None
 
-        # Convert prices to a DataFrame
         prices_df = prices_to_df(prices)
 
         progress.update_status(agent_id, ticker, "Calculating trend signals")
@@ -81,7 +78,6 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
         progress.update_status(agent_id, ticker, "Statistical analysis")
         stat_arb_signals = calculate_stat_arb_signals(prices_df)
 
-        # Combine all signals using a weighted ensemble approach
         strategy_weights = {
             "trend": 0.25,
             "mean_reversion": 0.20,
@@ -102,8 +98,7 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
             strategy_weights,
         )
 
-        # Generate detailed analysis report for this ticker
-        technical_analysis[ticker] = {
+        result = {
             "signal": combined_signal["signal"],
             "confidence": round(combined_signal["confidence"] * 100),
             "reasoning": {
@@ -134,15 +129,18 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
                 },
             },
         }
-        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(technical_analysis, indent=4))
+        progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(result, indent=4))
+        return result
 
-    # Create the technical analyst message
+    raw = parallel_per_ticker(tickers, _analyze)
+    technical_analysis = {k: v for k, v in raw.items() if v is not None}
+
     message = HumanMessage(
         content=json.dumps(technical_analysis),
         name=agent_id,
     )
 
-    if state["metadata"]["show_reasoning"]:
+    if state["metadata"].get("show_reasoning"):
         show_agent_reasoning(technical_analysis, "Technical Analyst")
 
     # Add the signal to the analyst_signals list
