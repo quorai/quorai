@@ -75,6 +75,8 @@ a:hover { text-decoration: underline; }
 
 .hero__tagline {
   font-size: 1.1rem;
+  font-weight: normal;
+  margin: 0;
   color: var(--text-muted);
   max-width: 480px;
 }

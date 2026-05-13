@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://nils-fl.github.io/quorai/sitemap.xml

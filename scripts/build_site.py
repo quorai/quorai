@@ -1,6 +1,7 @@
 """Build script: generates docs/agents.json and docs/flow.json from ANALYST_CONFIG and copies the logo."""
 
 import json
+from datetime import date
 from pathlib import Path
 import shutil
 
@@ -82,7 +83,25 @@ def build() -> None:
     else:
         print(f"Warning: logo not found at {ASSETS_SRC}")
 
+    build_sitemap()
     build_flow()
+
+
+def build_sitemap() -> None:
+    today = date.today().isoformat()
+    sitemap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://nils-fl.github.io/quorai/</loc>
+    <lastmod>{today}</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+"""
+    out_path = DOCS_DIR / "sitemap.xml"
+    out_path.write_text(sitemap)
+    print(f"Written {out_path}")
 
 
 def build_flow() -> None:

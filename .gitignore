@@ -50,6 +50,7 @@ Thumbs.db
 
 # Txt files
 *.txt
+!docs/robots.txt
 
 # PDF files
 *.pdf
