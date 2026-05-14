@@ -34,7 +34,7 @@ class TestSuccessOnFirstAttempt:
     def test_timeout_kwarg_passed(self, mock_get):
         mock_get.return_value = _mock_response(200)
         _make_api_request("https://example.com/ok", params={"k": "v"})
-        mock_get.assert_called_once_with("https://example.com/ok", params={"k": "v"}, timeout=(5, 30))
+        mock_get.assert_called_once_with("https://example.com/ok", params={"k": "v"}, headers=None, timeout=(5, 30))
 
 
 class TestRateLimitRetry:

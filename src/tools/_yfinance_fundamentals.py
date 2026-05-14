@@ -7,9 +7,12 @@ import datetime
 import logging
 import os
 import threading
+import time
 
 import pandas as pd
 import yfinance as yf
+
+from src.data.models import CompanyNews
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +26,7 @@ _YF_INCOME: dict[str, list[str]] = {
     "revenue": ["Total Revenue", "Operating Revenue"],
     "cost_of_revenue": ["Cost Of Revenue", "Reconciled Cost Of Revenue"],
     "gross_profit": ["Gross Profit"],
-    "operating_income": ["Operating Income", "Total Operating Income As Reported"],
+    "operating_income": ["Operating Income", "Total Operating Income As Reported", "Net Interest Income"],
     "net_income_loss_attributable_common_shareholders": [
         "Net Income Common Stockholders",
         "Net Income",
@@ -132,22 +135,30 @@ def fetch_statements(ticker: str, period: str, end_date: str, limit: int) -> lis
 
     TTM is computed by summing trailing-4-quarter income/cashflow flow items and
     using the most recent quarter's balance-sheet stock items.
+    Retries up to 2 times on transient empty results (e.g. intermittent DNS failures).
     """
-    yf_ticker = _get_ticker(ticker)
-    if yf_ticker is None:
-        return []
-
-    try:
-        with _yf_semaphore:
-            if period == "ttm":
-                return _fetch_ttm(yf_ticker, ticker, end_date, limit)
-            elif period == "quarterly":
-                return _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=True)
-            else:
-                return _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=False)
-    except Exception as exc:
-        logger.warning("yfinance statement fetch failed for %s (%s): %s", ticker, period, exc)
-        return []
+    _MAX_RETRIES = 2
+    for attempt in range(_MAX_RETRIES + 1):
+        if attempt > 0:
+            time.sleep(1.0 * attempt)
+        yf_ticker = _get_ticker(ticker)
+        if yf_ticker is None:
+            return []
+        try:
+            with _yf_semaphore:
+                if period == "ttm":
+                    result = _fetch_ttm(yf_ticker, ticker, end_date, limit)
+                elif period == "quarterly":
+                    result = _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=True)
+                else:
+                    result = _fetch_period(yf_ticker, ticker, end_date, limit, quarterly=False)
+            if result:
+                return result
+        except Exception as exc:
+            if attempt == _MAX_RETRIES:
+                logger.warning("yfinance statement fetch failed for %s (%s): %s", ticker, period, exc)
+                return []
+    return []
 
 
 def _fetch_period(yf_ticker, ticker: str, end_date: str, limit: int, *, quarterly: bool) -> list[StatementBundle]:
@@ -346,3 +357,62 @@ def fetch_market_cap(ticker: str, end_date: str) -> float | None:
     except Exception as exc:
         logger.warning("yfinance market cap fetch failed for %s on %s: %s", ticker, end_date, exc)
         return None
+
+
+def get_yfinance_news(
+    ticker: str,
+    end_date: str,
+    start_date: str | None = None,
+    limit: int = 50,
+) -> list[CompanyNews]:
+    """Fetch company news from Yahoo Finance for the given ticker.
+
+    yfinance returns the ~10-20 most recent items regardless of date range, so
+    filtering is done client-side after fetch.
+    """
+    yf_ticker = _get_ticker(ticker)
+    if yf_ticker is None:
+        return []
+
+    try:
+        with _yf_semaphore:
+            raw: list[dict] = yf_ticker.news or []
+    except Exception as exc:
+        logger.warning("yfinance news fetch failed for %s: %s", ticker, exc)
+        return []
+
+    end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    start_dt = datetime.datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc) if start_date else None
+
+    results: list[CompanyNews] = []
+    for item in raw:
+        ts = item.get("providerPublishTime")
+        if ts:
+            item_dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+            if item_dt > end_dt:
+                continue
+            if start_dt and item_dt < start_dt:
+                continue
+            date_str = item_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            date_str = ""
+
+        title = item.get("title") or ""
+        url = item.get("link") or ""
+        if not title or not url:
+            continue
+
+        results.append(
+            CompanyNews(
+                ticker=ticker,
+                title=title,
+                author=None,
+                source=item.get("publisher") or "Yahoo Finance",
+                date=date_str,
+                url=url,
+                summary=item.get("summary") or None,
+                sentiment=None,
+            )
+        )
+
+    return results[:limit]

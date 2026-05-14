@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS market_cap (
     key TEXT PRIMARY KEY,
     value REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ticker_cik (
+    key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -54,6 +58,7 @@ class Cache:
         self._insider_trades: dict[str, list[dict[str, Any]]] = {}
         self._company_news: dict[str, list[dict[str, Any]]] = {}
         self._market_cap: dict[str, float] = {}
+        self._ticker_to_cik: dict[str, str] = {}  # ticker (upper) → zero-padded 10-digit CIK
         self._init_db()
         self._load()
         if _LEGACY_PKL.exists():
@@ -65,7 +70,12 @@ class Cache:
                 self._mem_conn = sqlite3.connect(":memory:", check_same_thread=False)
             return self._mem_conn
         _CACHE_DIR.mkdir(exist_ok=True)
-        return sqlite3.connect(self._db_path, check_same_thread=False)
+        needs_init = not Path(self._db_path).exists()
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        if needs_init:
+            conn.executescript(_CREATE_STMTS)
+            conn.commit()
+        return conn
 
     def _init_db(self) -> None:
         conn = self._connect()
@@ -88,6 +98,8 @@ class Cache:
                 self._company_news[row[0]] = json.loads(row[1])
             for row in conn.execute("SELECT key, value FROM market_cap"):
                 self._market_cap[row[0]] = row[1]
+            for row in conn.execute("SELECT key, payload FROM ticker_cik"):
+                self._ticker_to_cik.update(json.loads(row[1]))
         except Exception as e:
             logger.warning("Failed to load SQLite cache (starting empty): %s", e)
 
@@ -173,6 +185,19 @@ class Cache:
             self._market_cap[key] = value
             conn = self._connect()
             conn.execute("INSERT OR REPLACE INTO market_cap (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+
+    # ── ticker_cik ───────────────────────────────────────────────────────────
+
+    def get_cik(self, ticker: str) -> str | None:
+        return self._ticker_to_cik.get(ticker.upper())
+
+    def set_cik_map(self, mapping: dict[str, str]) -> None:
+        """Persist the full ticker→CIK mapping (called once after fetching company_tickers.json)."""
+        with self._lock:
+            self._ticker_to_cik.update(mapping)
+            conn = self._connect()
+            conn.execute("INSERT OR REPLACE INTO ticker_cik (key, payload) VALUES (?, ?)", ("cik_map", json.dumps(self._ticker_to_cik)))
             conn.commit()
 
 

@@ -5,6 +5,7 @@ import random
 import threading
 import time
 
+import feedparser
 import pandas as pd
 import requests
 
@@ -17,6 +18,7 @@ from src.data.models import (
     LineItem,
     Price,
 )
+from src.tools._sec_edgar import get_cik
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,9 @@ class RateLimitExhaustedError(Exception):
 # Global cache instance
 _cache = get_cache()
 _market_cap_none_cache: set[str] = set()  # tracks ticker_date pairs with no market-cap data
+
+_mcap_inflight_lock = threading.Lock()
+_mcap_inflight: dict[str, tuple[threading.Event, list]] = {}
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 
@@ -100,11 +105,11 @@ _inflight: dict[tuple, tuple[threading.Event, list]] = {}
 _INFLIGHT_WAIT_TIMEOUT = float(os.environ.get("QUORAI_INFLIGHT_WAIT_TIMEOUT", "60"))
 
 
-def _execute_request(url: str, params: dict | None = None, max_retries: int = 3) -> requests.Response:
+def _execute_request(url: str, params: dict | None = None, max_retries: int = 3, headers: dict | None = None) -> requests.Response:
     """HTTP GET with exponential-backoff retry on 429, 5xx, and network errors."""
     for attempt in range(max_retries + 1):
         try:
-            response = requests.get(url, params=params, timeout=(5, 30))
+            response = requests.get(url, params=params, headers=headers, timeout=(5, 30))
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             if attempt < max_retries:
                 delay = 2**attempt + random.uniform(0, 1)
@@ -133,7 +138,7 @@ def _execute_request(url: str, params: dict | None = None, max_retries: int = 3)
     raise RuntimeError(f"Unexpected end of retry loop for {url!r}")
 
 
-def _make_api_request(url: str, params: dict | None = None, max_retries: int = 3) -> requests.Response:
+def _make_api_request(url: str, params: dict | None = None, max_retries: int = 3, headers: dict | None = None) -> requests.Response:
     """Make a GET request, coalescing concurrent identical requests into one HTTP call."""
     req_key = (url, frozenset((params or {}).items()))
 
@@ -150,14 +155,14 @@ def _make_api_request(url: str, params: dict | None = None, max_retries: int = 3
     if not owner:
         if not event.wait(timeout=_INFLIGHT_WAIT_TIMEOUT):
             logger.warning("Inflight wait timed out for %r; making independent request", url)
-            return _execute_request(url, params, max_retries)
+            return _execute_request(url, params, max_retries, headers=headers)
         outcome = result_holder[0]
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
     try:
-        response = _execute_request(url, params, max_retries)
+        response = _execute_request(url, params, max_retries, headers=headers)
         result_holder.append(response)
         return response
     except BaseException as exc:
@@ -594,15 +599,41 @@ def get_market_cap(
     if cache_key in _market_cap_none_cache:
         return None
 
-    from src.tools._yfinance_fundamentals import fetch_market_cap as _yf_market_cap
+    # Coalesce concurrent requests for the same ticker_date so only one yfinance
+    # call goes out and only one warning is logged per cache miss.
+    with _mcap_inflight_lock:
+        if cache_key in _mcap_inflight:
+            event, result_holder = _mcap_inflight[cache_key]
+            owner = False
+        else:
+            event = threading.Event()
+            result_holder = []
+            _mcap_inflight[cache_key] = (event, result_holder)
+            owner = True
 
-    result = _yf_market_cap(ticker, end_date)
-    if result is not None:
-        _cache.set_market_cap(cache_key, result)
-    else:
-        logger.warning("No market cap data for %s on %s", ticker, end_date)
-        _market_cap_none_cache.add(cache_key)
-    return result
+    if not owner:
+        event.wait(timeout=_INFLIGHT_WAIT_TIMEOUT)
+        outcome = result_holder[0] if result_holder else None
+        return None if (outcome is None or isinstance(outcome, BaseException)) else outcome
+
+    try:
+        from src.tools._yfinance_fundamentals import fetch_market_cap as _yf_market_cap
+
+        result = _yf_market_cap(ticker, end_date)
+        if result is not None:
+            _cache.set_market_cap(cache_key, result)
+        else:
+            logger.warning("No market cap data for %s on %s", ticker, end_date)
+            _market_cap_none_cache.add(cache_key)
+        result_holder.append(result)
+        return result
+    except BaseException as exc:
+        result_holder.append(exc)
+        raise
+    finally:
+        with _mcap_inflight_lock:
+            _mcap_inflight.pop(cache_key, None)
+            event.set()
 
 
 def prices_to_df(prices: list[Price]) -> pd.DataFrame:
@@ -622,3 +653,88 @@ def prices_to_df(prices: list[Price]) -> pd.DataFrame:
 def get_price_data(ticker: str, start_date: str, end_date: str, api_key: str = None) -> pd.DataFrame:
     prices = get_prices(ticker, start_date, end_date, api_key=api_key)
     return prices_to_df(prices)
+
+
+_SEC_EDGAR_BASE = "https://www.sec.gov/cgi-bin/browse-edgar"
+
+
+def get_sec_filings_as_news(
+    ticker: str,
+    end_date: str,
+    start_date: str | None = None,
+    limit: int = 40,
+    user_agent: str | None = None,
+) -> list[CompanyNews]:
+    """Fetch SEC EDGAR filing entries for a ticker and return them as CompanyNews items."""
+    ua = user_agent or get_settings().SEC_USER_AGENT
+    cik = get_cik(ticker, ua)
+    if not cik:
+        logger.warning("No CIK found for ticker %s; skipping SEC news", ticker)
+        return []
+
+    cache_key = f"sec_{ticker}_{start_date or 'none'}_{end_date}_{limit}"
+    if cached_data := _cache.get_company_news(cache_key):
+        return [CompanyNews(**n) for n in cached_data]
+
+    url = _SEC_EDGAR_BASE
+    params = {
+        "action": "getcompany",
+        "CIK": cik,
+        "type": "",
+        "dateb": "",
+        "owner": "include",
+        "count": str(limit),
+        "output": "atom",
+    }
+
+    try:
+        response = _make_api_request(url, params=params, headers={"User-Agent": ua})
+    except RateLimitExhaustedError as exc:
+        logger.warning("Skipping SEC filings for %s: %s", ticker, exc)
+        return []
+    if response.status_code != 200:
+        logger.warning("SEC EDGAR returned %d for %s", response.status_code, ticker)
+        return []
+
+    feed = feedparser.parse(response.text)
+
+    end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    start_dt = datetime.datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc) if start_date else None
+
+    results: list[CompanyNews] = []
+    for entry in feed.entries:
+        updated_parsed = getattr(entry, "updated_parsed", None)
+        if updated_parsed:
+            item_dt = datetime.datetime(*updated_parsed[:6], tzinfo=datetime.timezone.utc)
+            if item_dt > end_dt:
+                continue
+            if start_dt and item_dt < start_dt:
+                continue
+            date_str = item_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            date_str = ""
+
+        title = getattr(entry, "title", "") or ""
+        link = getattr(entry, "link", "") or ""
+        summary = getattr(entry, "summary", None) or title
+
+        if not title:
+            continue
+
+        results.append(
+            CompanyNews(
+                ticker=ticker,
+                title=title,
+                author=None,
+                source="SEC EDGAR",
+                date=date_str,
+                url=link,
+                summary=summary,
+                sentiment=None,
+            )
+        )
+
+    results = results[:limit]
+    if results:
+        _cache.set_company_news(cache_key, [n.model_dump() for n in results])
+    return results

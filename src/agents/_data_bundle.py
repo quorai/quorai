@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 from src.data.models import CompanyNews, FinancialMetrics, InsiderTrade, LineItem, Price
+from src.tools._yfinance_fundamentals import get_yfinance_news
 from src.tools.api import (
     get_company_news,
     get_financial_metrics,
     get_insider_trades,
     get_market_cap,
     get_prices,
+    get_sec_filings_as_news,
     search_line_items,
 )
+
+
+def _normalize_title(title: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", title.lower())[:80]
+
+
+def _merge_news(sources: list[list[CompanyNews]]) -> list[CompanyNews]:
+    """Concatenate multiple news lists, deduplicating by (date[:10], normalized_title[:80])."""
+    seen: set[tuple[str, str]] = set()
+    merged: list[CompanyNews] = []
+    for items in sources:
+        for item in items:
+            key = (item.date[:10], _normalize_title(item.title))
+            if key not in seen:
+                seen.add(key)
+                merged.append(item)
+    return merged
 
 
 @dataclass
@@ -68,7 +88,13 @@ class AgentDataBundle:
 
         insider_trades = get_insider_trades(ticker, end_date, start_date=start_date, limit=insider_limit, api_key=api_key) if insider_limit is not None else []
 
-        company_news = get_company_news(ticker, end_date, start_date=start_date, limit=news_limit, api_key=api_key) if news_limit is not None else []
+        if news_limit is not None:
+            finnhub_news = get_company_news(ticker, end_date, start_date=start_date, limit=news_limit, api_key=api_key)
+            yf_news = get_yfinance_news(ticker, end_date, start_date=start_date, limit=news_limit)
+            sec_news = get_sec_filings_as_news(ticker, end_date, start_date=start_date, limit=news_limit)
+            company_news = _merge_news([finnhub_news, yf_news, sec_news])[:news_limit]
+        else:
+            company_news = []
 
         prices = get_prices(ticker, start_date, end_date, api_key=api_key) if include_prices and start_date else []
 

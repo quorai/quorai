@@ -19,8 +19,32 @@ from src.utils.progress import progress
 logger = logging.getLogger(__name__)
 
 # Semaphore to cap concurrent LLM calls across all threads.
-# Defaults to QUORAI_LLM_MAX_CONCURRENCY env var (default 16).
-_llm_semaphore = threading.Semaphore(int(os.environ.get("QUORAI_LLM_MAX_CONCURRENCY", "16")))
+# Defaults to QUORAI_LLM_MAX_CONCURRENCY env var (default 8).
+_llm_semaphore = threading.Semaphore(int(os.environ.get("QUORAI_LLM_MAX_CONCURRENCY", "8")))
+
+
+class _RateLimiter:
+    """Sliding-window rate limiter: caps calls per minute across all threads."""
+
+    def __init__(self, rpm: int) -> None:
+        self._rpm = rpm
+        self._lock = threading.Lock()
+        self._call_times: list[float] = []
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                cutoff = now - 60.0
+                self._call_times = [t for t in self._call_times if t > cutoff]
+                if len(self._call_times) < self._rpm:
+                    self._call_times.append(now)
+                    return
+                sleep_until = self._call_times[0] + 60.0 + 0.1
+            time.sleep(max(0.05, sleep_until - time.monotonic()))
+
+
+_rate_limiter = _RateLimiter(int(os.environ.get("QUORAI_LLM_MAX_RPM", "14")))
 
 
 class _UsageCapture(BaseCallbackHandler):
@@ -98,7 +122,7 @@ def call_llm(
     pydantic_model: type[BaseModel],
     agent_name: str | None = None,
     state: AgentState | None = None,
-    max_retries: int = 3,
+    max_retries: int = 5,
     default_factory=None,
 ) -> BaseModel:
     """
@@ -177,6 +201,7 @@ def call_llm(
 
             _attach_cache_control(invoke_prompt, model_name, model_provider)
 
+            _rate_limiter.acquire()
             with _llm_semaphore:
                 result = llm.invoke(invoke_prompt, config={"callbacks": [_capture]})
 
@@ -210,10 +235,11 @@ def call_llm(
                 logger.warning("json_mode rejected by provider for %s (attempt %d); switching to manual extraction", agent_name or model_name, attempt + 1)
                 use_manual_extraction = True
 
-            # Exponential back-off for rate-limit errors; immediate retry otherwise
+            # Exponential back-off for rate-limit errors; immediate retry otherwise.
+            # Use a longer base for 429s so we can outlast a 60-second window reset.
             is_rate_limit = "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
             if is_rate_limit and attempt < max_retries - 1:
-                backoff = min(2**attempt + random.uniform(0, 1), 30)
+                backoff = min(10 * (2**attempt) + random.uniform(0, 3), 90)
                 logger.warning("Rate limit for %s (attempt %d); backing off %.1fs", agent_name or model_name, attempt + 1, backoff)
                 time.sleep(backoff)
 

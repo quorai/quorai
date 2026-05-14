@@ -9,11 +9,13 @@ import pandas as pd
 
 from src.llm.request import RunRequest
 from src.orchestration.preflight import PipelineContext
+from src.tools._yfinance_fundamentals import get_yfinance_news
 from src.tools.api import (
     get_company_news,
     get_financial_metrics,
     get_insider_trades,
     get_price_data,
+    get_sec_filings_as_news,
 )
 
 from .benchmarks import BenchmarkCalculator
@@ -101,6 +103,8 @@ class BacktestEngine:
             get_financial_metrics(ticker, self._end_date, limit=10)
             get_insider_trades(ticker, self._end_date, start_date=self._start_date, limit=1000)
             get_company_news(ticker, self._end_date, start_date=self._start_date, limit=1000)
+            get_yfinance_news(ticker, self._end_date, start_date=self._start_date, limit=1000)
+            get_sec_filings_as_news(ticker, self._end_date, start_date=self._start_date, limit=100)
 
         spy_df = get_price_data("SPY", self._start_date, self._end_date)
         self._benchmark.load(spy_df)

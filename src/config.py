@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Finnhub
     FINNHUB_API_KEY: str = ""
 
+    # SEC EDGAR (no key required; User-Agent is mandatory per SEC fair-access policy)
+    SEC_USER_AGENT: str = "Quorai Research n.flaschel@gmail.com"
+
     # LLM providers
     OPENAI_API_KEY: str = ""
     OPENAI_API_BASE: str = ""
