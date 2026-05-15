@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 
+from src.feedback.loader import load_weights
 from src.feedback.scorer import compute_weights
 
 
@@ -108,3 +109,47 @@ def test_empty_file_returns_empty():
         )
 
         assert weights == {}
+
+
+def test_scorer_keys_match_debate_node_convention():
+    """scorer → weights.json keys must not have _agent suffix; loader must strip legacy suffix.
+
+    The debate_node strips '_agent' before looking up agent_weights. If weights.json
+    is keyed with the suffix the lookup silently falls back to 1.0 and conviction
+    weights are never applied (regression test for the suffix-mismatch bug).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        labeled = Path(tmpdir) / "labeled.jsonl"
+        weights_path = Path(tmpdir) / "weights.json"
+        report_path = Path(tmpdir) / "report.json"
+
+        # signal_log writes agent_id with _agent suffix (LangGraph node name convention)
+        recs = _build_records("agent_a_agent", n_hits=15, n_misses=5)
+        recs += _build_records("agent_b_agent", n_hits=5, n_misses=15, start_date=20250201)
+        _make_labeled_jsonl(labeled, recs)
+
+        compute_weights(
+            labeled_path=str(labeled),
+            horizon=5,
+            window_days=60,
+            weights_path=str(weights_path),
+            report_path=str(report_path),
+            min_samples=5,
+        )
+
+        # weights.json should be keyed without _agent suffix
+        raw = json.loads(weights_path.read_text())
+        assert "agent_a" in raw, "weights.json must use bare agent names (no _agent suffix)"
+        assert "agent_a_agent" not in raw, "weights.json must not contain _agent suffix"
+
+        # load_weights must also normalise legacy files written with the old suffix
+        weights_path.write_text(json.dumps({"agent_a_agent": 1.5, "agent_b_agent": 0.7}))
+        loaded = load_weights(str(weights_path))
+        assert "agent_a" in loaded
+        assert "agent_a_agent" not in loaded
+        assert loaded["agent_a"] == 1.5
+
+        # Keys returned by load_weights must be usable directly by the debate node's
+        # stripped lookup (agent.replace("_agent", "") → same key as in loaded dict)
+        for key in loaded:
+            assert not key.endswith("_agent"), f"loaded key {key!r} still has suffix"

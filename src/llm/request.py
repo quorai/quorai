@@ -28,6 +28,32 @@ class RunRequest:
     api_keys: dict | None = None
     agent_models: dict[str, tuple[str, str]] = field(default_factory=dict)
 
+    def validate_provider_keys(
+        self,
+        settings,
+        *,
+        global_model: str | None = None,
+        global_provider: str | None = None,
+    ) -> None:
+        """Raise ValueError early if any configured provider is missing its API key.
+
+        Call before starting the agent graph so users get a clear error at startup
+        instead of a cryptic traceback mid-run.
+        """
+        from src.llm.models import check_provider_api_key
+
+        for agent_name, (model, provider) in self.agent_models.items():
+            try:
+                check_provider_api_key(provider, self.api_keys)
+            except ValueError as exc:
+                raise ValueError(f"agent_models entry '{agent_name}': {exc}") from exc
+
+        if global_provider:
+            try:
+                check_provider_api_key(global_provider, self.api_keys)
+            except ValueError as exc:
+                raise ValueError(f"global model '{global_model}' ({global_provider}): {exc}") from exc
+
     def get_agent_model_config(self, agent_name: str) -> tuple[str | None, str | None]:
         """Return ``(model_name, provider)`` for this agent, or ``(None, None)`` to use global defaults."""
         if not self.agent_models:

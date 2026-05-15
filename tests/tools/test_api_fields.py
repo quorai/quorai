@@ -144,7 +144,7 @@ class TestSearchLineItems:
             patch("src.tools._yfinance_fundamentals.yf") as mock_yf,
         ):
             mock_yf.Ticker.return_value = yf_ticker
-            result = search_line_items("AAPL", ["revenue", "net_income"], "2024-03-01", period="annual", limit=1)
+            result = search_line_items("AAPL", ["revenue", "net_income"], "2024-05-01", period="annual", limit=1)
 
         assert len(result) == 1
         item = result[0]
@@ -169,7 +169,7 @@ class TestSearchLineItems:
             patch("src.tools._yfinance_fundamentals.yf") as mock_yf,
         ):
             mock_yf.Ticker.return_value = yf_ticker
-            result = search_line_items("AAPL", ["goodwill_and_intangible_assets"], "2024-03-01", period="annual", limit=1)
+            result = search_line_items("AAPL", ["goodwill_and_intangible_assets"], "2024-05-01", period="annual", limit=1)
 
         assert len(result) == 1
         assert result[0].goodwill_and_intangible_assets == pytest.approx(60_000)
@@ -190,7 +190,7 @@ class TestSearchLineItems:
             patch("src.tools._yfinance_fundamentals.yf") as mock_yf,
         ):
             mock_yf.Ticker.return_value = yf_ticker
-            result = search_line_items("AAPL", ["return_on_invested_capital"], "2024-03-01", period="annual", limit=1)
+            result = search_line_items("AAPL", ["return_on_invested_capital"], "2024-05-01", period="annual", limit=1)
 
         assert len(result) == 1
         # ROIC = 20_000 / (30_000 + 120_000)

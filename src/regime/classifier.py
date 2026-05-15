@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import math
 
 import pandas as pd
 
@@ -35,6 +36,9 @@ def classify_regime(
         return MarketRegime.NEUTRAL
 
     closes = df["close"]
+    if closes.isna().any():
+        return MarketRegime.NEUTRAL
+
     current = float(closes.iloc[-1])
 
     sma = float(closes.rolling(sma_window).mean().iloc[-1])
@@ -43,6 +47,9 @@ def classify_regime(
 
     peak = float(closes.rolling(vol_long_window).max().iloc[-1])
     drawdown = (current - peak) / peak if peak > 0 else 0.0
+
+    if any(math.isnan(x) for x in (sma, short_vol, long_vol, current)):
+        return MarketRegime.NEUTRAL
 
     if long_vol == 0:
         return MarketRegime.NEUTRAL

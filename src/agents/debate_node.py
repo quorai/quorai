@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -42,6 +43,9 @@ def _aggregate_to_groups(
                 continue
             signal = sig_data.get("signal", "neutral")
             raw_conf = float(sig_data.get("confidence") or 0.0)
+            if math.isnan(raw_conf):
+                raw_conf = 0.0
+            raw_conf = max(0.0, min(100.0, raw_conf))
             w = (agent_weights or {}).get(agent_label, 1.0)
             confidence = raw_conf * max(0.0, w)
             reasoning = _flatten_reasoning(sig_data.get("reasoning", ""))
@@ -57,7 +61,10 @@ def _aggregate_to_groups(
                 weighted_stance = 0.0
                 avg_conf = 0.0
             else:
-                weighted_stance = sum(_STANCE_SCORE[sig] * conf for _, sig, conf, _ in members) / total_weight
+                unknown = [sig for _, sig, _, _ in members if sig not in _STANCE_SCORE]
+                if unknown:
+                    logger.warning("Unknown signal value(s) in debate aggregation, treating as neutral: %s", unknown)
+                weighted_stance = sum(_STANCE_SCORE.get(sig, 0) * conf for _, sig, conf, _ in members) / total_weight
                 avg_conf = total_weight / len(members)
 
             if weighted_stance >= 0.25:

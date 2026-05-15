@@ -12,7 +12,7 @@ class SignalLogger:
     def __init__(self, run_id: str, log_dir: str = "logs") -> None:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         self._path = Path(log_dir) / f"signals-{run_id}.jsonl"
-        self._file = open(self._path, "w", encoding="utf-8")  # noqa: WPS515
+        self._file = open(self._path, "a", encoding="utf-8")  # noqa: WPS515
 
     @property
     def path(self) -> str:

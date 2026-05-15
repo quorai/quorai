@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 from colorama import Fore, Style, init
 
 from src.cli.input import parse_tickers, select_model
+from src.llm.models import check_provider_api_key
+from src.utils.validation import validate_ticker
 from src.main import run_quorai
 from src.utils.analysts import ALL_ANALYST_KEYS
 
@@ -79,8 +81,9 @@ def _main_run(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     start_date, end_date = _resolve_dates(args)
-    tickers = parse_tickers(args.tickers)
+    tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
     model_name, model_provider = _resolve_model(args)
+    check_provider_api_key(model_provider)
 
     engine = BacktestEngine(
         agent=run_quorai,
@@ -133,8 +136,9 @@ def _main_compare(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     start_date, end_date = _resolve_dates(args)
-    tickers = parse_tickers(args.tickers)
+    tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
     model_name, model_provider = _resolve_model(args)
+    check_provider_api_key(model_provider)
 
     common = dict(
         tickers=tickers,

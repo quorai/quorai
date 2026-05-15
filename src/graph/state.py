@@ -4,6 +4,7 @@ import textwrap
 import threading
 
 from langchain_core.messages import BaseMessage
+from rich.markup import escape as _escape_markup
 from rich.text import Text
 from typing_extensions import Annotated, Sequence, TypedDict
 
@@ -214,9 +215,9 @@ def show_agent_reasoning(output, agent_name: str) -> None:
             try:
                 progress.print(json.dumps(json.loads(output), indent=2))
             except json.JSONDecodeError:
-                progress.print(output)
+                progress.print(_escape_markup(output))
         elif not isinstance(output, dict):
-            progress.print(str(output))
+            progress.print(_escape_markup(str(output)))
 
         for row in rows:
             progress.print(row)

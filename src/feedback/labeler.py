@@ -14,6 +14,12 @@ def label_signals(
 ) -> str:
     """Label each signal in signal_log_path with forward returns.
 
+    This function is only valid in backtest context where price history beyond
+    the signal date is available. It must NOT be called from the live runner
+    immediately after a cycle — the forward horizon has not elapsed yet and
+    the resulting labels would be wrong or null. Use offline backtest runs to
+    refresh weights.json instead.
+
     Args:
         signal_log_path: Path to JSONL produced by SignalLogger.
         price_data: {ticker: DataFrame with DatetimeIndex and 'close' column}.

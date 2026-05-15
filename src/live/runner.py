@@ -9,6 +9,7 @@ from src.backtesting.types import AgentDecisions, PortfolioSnapshot
 from src.broker import Broker
 from src.broker.alpaca_client import AlpacaClient
 from src.broker.portfolio_adapter import to_snapshot
+from src.config import refresh_settings
 from src.live.audit_journal import AuditJournal
 from src.live.executor import LiveExecutor
 from src.live.risk_gate import RiskGate
@@ -62,6 +63,7 @@ class LiveRunner:
         self._sod_equity: float = 0.0
         self._signal_log_path: str | None = None
         self._token_summary_data: dict = {}
+        self._signal_prices: dict[str, float] = {}
 
     @property
     def signal_log_path(self) -> str | None:
@@ -116,7 +118,7 @@ class LiveRunner:
             if spy_df is None:
                 logger.warning("SPY price data unavailable — skipping regime selection")
 
-        # 5. Fetch signal prices (7-day lookback) for the signal log
+        # 5. Fetch signal prices (7-day lookback) for the signal log and risk gate
         signal_prices: dict[str, float] = {}
         if self._enable_signal_log:
             from src.tools.api import get_prices
@@ -152,6 +154,7 @@ class LiveRunner:
             )
             self._token_summary_data = ctx.token_summary()
 
+        self._signal_prices = signal_prices
         return output["decisions"], snapshot
 
     def execute(self, decisions: AgentDecisions) -> dict[str, str]:
@@ -165,10 +168,43 @@ class LiveRunner:
             sod_equity=self._sod_equity,
             idempotency_guard=self._idempotency_guard,
         )
-        return executor.execute_decisions(decisions, dry_run=self.dry_run)
+        results = executor.execute_decisions(decisions, dry_run=self.dry_run, current_prices=self._signal_prices or None)
+        if not self.dry_run and executor.submitted_orders:
+            from src.live.reconciler import Reconciler
+
+            recon = Reconciler(broker=self._broker, journal=self._journal)
+            fills = recon.reconcile(list(executor.submitted_orders.values()))
+            for ticker, order_id in executor.submitted_orders.items():
+                info = fills.get(order_id)
+                if info:
+                    results[ticker] = f"{info['status']} (filled={info['filled_qty']:.3f})"
+        return results
 
     def run(self) -> dict:
         """Full pipeline: prepare → execute. Returns {decisions, execution_results, portfolio_snapshot}."""
+        # Reload settings so KILL_SWITCH toggled in .env after process start is respected.
+        _settings = refresh_settings()
+        if _settings.KILL_SWITCH:
+            logger.warning("[runner] KILL_SWITCH active — aborting before agent graph.")
+            return {
+                "decisions": {},
+                "execution_results": {t: "skipped (kill_switch)" for t in self.tickers},
+                "portfolio_snapshot": None,
+            }
+
+        # Check idempotency before spending LLM tokens. The per-order check inside
+        # execute_decisions acts as belt-and-braces; this early check avoids the
+        # cost of a full agent-graph run on a duplicate invocation.
+        if self._idempotency_guard is not None:
+            allowed, reason = self._idempotency_guard.check()
+            if not allowed:
+                logger.warning("[runner] idempotency guard blocked run before prepare: %s", reason)
+                return {
+                    "decisions": {},
+                    "execution_results": {t: f"skipped (idempotency: {reason})" for t in self.tickers},
+                    "portfolio_snapshot": None,
+                }
+
         decisions, snapshot = self.prepare()
 
         print("\nDecisions:")

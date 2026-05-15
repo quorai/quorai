@@ -62,8 +62,11 @@ def test_full_pipeline_produces_weights(tmp_path):
         report_path=str(report_path),
     )
 
+    # scorer strips _agent suffix — expected keys use bare names
+    expected_keys = {a.removesuffix("_agent") for a in agents}
+
     assert weights, "weights must be non-empty after scoring"
-    assert set(weights.keys()) == set(agents)
+    assert set(weights.keys()) == expected_keys
 
     for agent_id, w in weights.items():
         assert w > 0, f"weight for {agent_id} should be positive"
@@ -79,7 +82,7 @@ def test_full_pipeline_produces_weights(tmp_path):
     # Report file was written
     assert report_path.exists()
     report = json.loads(report_path.read_text())
-    assert set(report.keys()) == set(agents)
+    assert set(report.keys()) == expected_keys
     for entry in report.values():
         assert "hit_rate" in entry
         assert "samples" in entry
@@ -98,8 +101,10 @@ def test_load_weights_reads_written_file(tmp_path):
     weights_path = tmp_path / "weights.json"
     compute_weights(labeled_path, horizon=5, weights_path=str(weights_path), report_path=str(tmp_path / "report.json"))
 
+    # scorer strips _agent suffix; loaded keys use bare names
+    expected_keys = {a.removesuffix("_agent") for a in agents}
     loaded = load_weights(str(weights_path))
-    assert set(loaded.keys()) == set(agents)
+    assert set(loaded.keys()) == expected_keys
     for v in loaded.values():
         assert isinstance(v, float)
 
@@ -124,6 +129,6 @@ def test_pipeline_with_insufficient_data_falls_back_to_prior(tmp_path):
     weights_path = tmp_path / "weights.json"
     weights = compute_weights(labeled_path, horizon=5, weights_path=str(weights_path), report_path=str(tmp_path / "report.json"))
 
-    # sparse_agent should get weight=1.0 (neutral prior: 0.5 / mean=0.5)
-    assert "sparse_agent" in weights
-    assert abs(weights["sparse_agent"] - 1.0) < 1e-6
+    # scorer strips _agent suffix; key is "sparse", not "sparse_agent"
+    assert "sparse" in weights
+    assert abs(weights["sparse"] - 1.0) < 1e-6

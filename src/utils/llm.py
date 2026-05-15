@@ -1,9 +1,13 @@
 """Helper functions for LLM"""
 
+from contextvars import ContextVar
+import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 import random
+import sqlite3
 import threading
 import time
 from typing import Any
@@ -19,8 +23,8 @@ from src.utils.progress import progress
 logger = logging.getLogger(__name__)
 
 # Semaphore to cap concurrent LLM calls across all threads.
-# Defaults to QUORAI_LLM_MAX_CONCURRENCY env var (default 8).
-_llm_semaphore = threading.Semaphore(int(os.environ.get("QUORAI_LLM_MAX_CONCURRENCY", "8")))
+# Defaults to QUORAI_LLM_MAX_CONCURRENCY env var (default 32).
+_llm_semaphore = threading.Semaphore(int(os.environ.get("QUORAI_LLM_MAX_CONCURRENCY", "32")))
 
 
 class _RateLimiter:
@@ -44,7 +48,72 @@ class _RateLimiter:
             time.sleep(max(0.05, sleep_until - time.monotonic()))
 
 
-_rate_limiter = _RateLimiter(int(os.environ.get("QUORAI_LLM_MAX_RPM", "14")))
+_rate_limiter = _RateLimiter(int(os.environ.get("QUORAI_LLM_MAX_RPM", "120")))
+
+
+_DEFAULT_MAX_RETRIES = int(os.environ.get("QUORAI_LLM_MAX_RETRIES", "3"))
+
+
+class _LLMCache:
+    """On-disk SQLite cache for LLM responses.
+
+    Keyed by sha256 of (model_name, provider, pydantic_model_name, prompt contents).
+    Disabled when QUORAI_LLM_CACHE=0.
+    """
+
+    def __init__(self) -> None:
+        self._enabled = os.environ.get("QUORAI_LLM_CACHE", "1") != "0"
+        self._db_path: str = ""
+        if not self._enabled:
+            return
+        cache_dir = Path(".cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._db_path = str(cache_dir / "llm_cache.db")
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE IF NOT EXISTS responses (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get(self, key: str) -> str | None:
+        if not self._enabled:
+            return None
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        try:
+            row = conn.execute("SELECT payload FROM responses WHERE key = ?", (key,)).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def set(self, key: str, payload: str) -> None:
+        if not self._enabled:
+            return
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        try:
+            conn.execute("INSERT OR REPLACE INTO responses (key, payload) VALUES (?, ?)", (key, payload))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+_llm_cache = _LLMCache()
+
+
+def _write_to_cache(key: str, model: BaseModel) -> None:
+    try:
+        _llm_cache.set(key, model.model_dump_json())
+    except Exception:
+        pass
+
+
+def _prompt_cache_key(prompt: Any, model_name: str, model_provider: str, pydantic_model_name: str) -> str:
+    """Stable cache key derived from model identity and prompt content."""
+    messages = getattr(prompt, "messages", None) or (prompt if isinstance(prompt, list) else [])
+    content_parts = [getattr(m, "content", str(m)) for m in messages]
+    raw = json.dumps([model_name.lower(), model_provider.lower(), pydantic_model_name] + content_parts, ensure_ascii=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 class _UsageCapture(BaseCallbackHandler):
@@ -75,26 +144,34 @@ class _UsageCapture(BaseCallbackHandler):
                 )
 
 
-_run_token_log: list[dict] = []
+# Per-run token accumulator scoped by ContextVar so concurrent runs in different
+# threads each see their own list while worker threads within one run share it.
+_run_token_log: ContextVar[list[dict] | None] = ContextVar("_run_token_log", default=None)
 _token_log_lock = threading.Lock()
 
 
 def reset_token_log() -> None:
-    """Clear the per-run token log. Call before each agent graph invocation."""
-    with _token_log_lock:
-        _run_token_log.clear()
+    """Start a fresh token log for the current context. Call before each agent graph invocation."""
+    _run_token_log.set([])
 
 
 def get_token_log() -> list[dict]:
     """Return a snapshot of per-call token records for the current run."""
+    log = _run_token_log.get()
+    if log is None:
+        return []
     with _token_log_lock:
-        return list(_run_token_log)
+        return list(log)
 
 
 def get_token_summary() -> dict:
     """Return aggregated token counts and call count for the current run."""
-    with _token_log_lock:
-        snapshot = list(_run_token_log)
+    log = _run_token_log.get()
+    if log is None:
+        snapshot: list[dict] = []
+    else:
+        with _token_log_lock:
+            snapshot = list(log)
     return {
         "calls": len(snapshot),
         "input_tokens": sum(e["input_tokens"] for e in snapshot),
@@ -122,22 +199,21 @@ def call_llm(
     pydantic_model: type[BaseModel],
     agent_name: str | None = None,
     state: AgentState | None = None,
-    max_retries: int = 5,
+    max_retries: int = _DEFAULT_MAX_RETRIES,
     default_factory=None,
 ) -> BaseModel:
-    """
-    Makes an LLM call with retry logic, handling both JSON supported and non-JSON supported models.
+    """Makes an LLM call with retry logic, returning a structured Pydantic model.
 
     Args:
-        prompt: The prompt to send to the LLM
-        pydantic_model: The Pydantic model class to structure the output
-        agent_name: Optional name of the agent for progress updates and model config extraction
-        state: Optional state object to extract agent-specific model configuration
-        max_retries: Maximum number of retries (default: 3)
-        default_factory: Optional factory function to create default response on failure
+        prompt: The prompt to send to the LLM.
+        pydantic_model: The Pydantic model class to structure the output.
+        agent_name: Optional name of the agent for progress updates and model config.
+        state: Optional state object to extract agent-specific model configuration.
+        max_retries: Maximum number of attempts (default: QUORAI_LLM_MAX_RETRIES env var, default 3).
+        default_factory: Optional factory function to create default response on failure.
 
     Returns:
-        An instance of the specified Pydantic model
+        An instance of the specified Pydantic model.
     """
 
     if state and agent_name:
@@ -171,8 +247,6 @@ def call_llm(
     # When model_info is None (unlisted model), fall back on the name: DeepSeek and Gemini
     # reject the response_format parameter that json_mode sends, so use manual extraction.
     def _name_implies_manual(name: str, provider: str) -> bool:
-        if provider.upper() == "OPENROUTER":
-            return False  # OpenRouter normalises response_format for all routed models
         n = name.lower()
         return "deepseek" in n or "gemini" in n
 
@@ -186,6 +260,15 @@ def call_llm(
     hint = HumanMessage(content="IMPORTANT: You MUST respond with ONLY a valid JSON object matching the schema. No prose, no explanation, no markdown fences.")
 
     _capture = _UsageCapture()
+
+    # Check on-disk cache before hitting the LLM.
+    cache_key = _prompt_cache_key(prompt, model_name, model_provider, pydantic_model.__name__)
+    cached_payload = _llm_cache.get(cache_key)
+    if cached_payload is not None:
+        try:
+            return pydantic_model.model_validate_json(cached_payload)
+        except Exception:
+            logger.debug("LLM cache entry corrupt for key %.16s; fetching fresh", cache_key)
 
     for attempt in range(max_retries):
         try:
@@ -218,13 +301,19 @@ def call_llm(
                 parsed_result = extract_json_from_response(result.content)
                 if parsed_result:
                     output = pydantic_model(**parsed_result)
-                    with _token_log_lock:
-                        _run_token_log.append(token_entry)
+                    _log = _run_token_log.get()
+                    if _log is not None:
+                        with _token_log_lock:
+                            _log.append(token_entry)
+                    _write_to_cache(cache_key, output)
                     return output
                 raise ValueError("Could not extract JSON from LLM response")
             else:
-                with _token_log_lock:
-                    _run_token_log.append(token_entry)
+                _log = _run_token_log.get()
+                if _log is not None:
+                    with _token_log_lock:
+                        _log.append(token_entry)
+                _write_to_cache(cache_key, result)
                 return result
 
         except Exception as exc:

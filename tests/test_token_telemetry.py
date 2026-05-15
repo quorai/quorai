@@ -67,14 +67,15 @@ def test_usage_capture_handles_missing_metadata():
 
 
 def test_reset_clears_log():
-    llm_module._run_token_log.append({"agent": "test", "model": "x", "input_tokens": 1, "output_tokens": 1})
+    reset_token_log()
+    llm_module._run_token_log.get().append({"agent": "test", "model": "x", "input_tokens": 1, "output_tokens": 1})
     reset_token_log()
     assert get_token_log() == []
 
 
 def test_get_token_log_returns_snapshot():
     reset_token_log()
-    llm_module._run_token_log.append({"agent": "a", "model": "m", "input_tokens": 5, "output_tokens": 3})
+    llm_module._run_token_log.get().append({"agent": "a", "model": "m", "input_tokens": 5, "output_tokens": 3})
     snapshot = get_token_log()
     assert len(snapshot) == 1
     # Snapshot is independent of the live list
@@ -84,7 +85,7 @@ def test_get_token_log_returns_snapshot():
 
 def test_get_token_summary():
     reset_token_log()
-    llm_module._run_token_log.extend(
+    llm_module._run_token_log.get().extend(
         [
             {"agent": "a", "model": "m", "input_tokens": 10, "output_tokens": 4},
             {"agent": "b", "model": "m", "input_tokens": 20, "output_tokens": 6},

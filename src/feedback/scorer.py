@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 import json
+import os
 from pathlib import Path
+
+# Agents with very lucky or unlucky streaks are clamped to this range so no
+# single analyst can dominate or be silenced by the conviction-weighting system.
+_WEIGHT_MIN = float(os.environ.get("QUORAI_AGENT_WEIGHT_MIN", "0.1"))
+_WEIGHT_MAX = float(os.environ.get("QUORAI_AGENT_WEIGHT_MAX", "3.0"))
 
 
 def _is_hit(signal: str, forward_return: float | None) -> bool | None:
@@ -14,6 +20,14 @@ def _is_hit(signal: str, forward_return: float | None) -> bool | None:
     if signal == "bearish":
         return forward_return < 0
     return None  # neutral signals are excluded from scoring
+
+
+def _atomic_json_write(path: str, data: object) -> None:
+    """Write JSON to a temp file then rename, avoiding partial-read races."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
 
 
 def compute_weights(
@@ -36,7 +50,8 @@ def compute_weights(
         for line in f:
             rec = json.loads(line)
             if rec.get(f"return_{horizon}d") is not None:
-                records_by_agent[rec["agent_id"]].append(rec)
+                agent_key = rec["agent_id"].removesuffix("_agent")
+                records_by_agent[agent_key].append(rec)
 
     hit_rates: dict[str, float] = {}
     sample_counts: dict[str, int] = {}
@@ -65,11 +80,10 @@ def compute_weights(
     if mean_w == 0:
         weights = {agent: 1.0 for agent in raw_weights}
     else:
-        weights = {agent: w / mean_w for agent, w in raw_weights.items()}
+        weights = {agent: max(_WEIGHT_MIN, min(_WEIGHT_MAX, w / mean_w)) for agent, w in raw_weights.items()}
 
     Path(weights_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(weights_path, "w") as f:
-        json.dump(weights, f, indent=2)
+    _atomic_json_write(weights_path, weights)
 
     report = {
         agent: {
@@ -79,7 +93,6 @@ def compute_weights(
         }
         for agent in sorted(weights)
     }
-    with open(report_path, "w") as f:
-        json.dump(report, f, indent=2)
+    _atomic_json_write(report_path, report)
 
     return weights

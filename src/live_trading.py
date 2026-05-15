@@ -74,7 +74,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+    from src.utils.validation import validate_ticker
+
+    tickers = [validate_ticker(t.strip().upper()) for t in args.tickers.split(",") if t.strip()]
     selected_analysts = [a.strip() for a in args.analysts.split(",")] if args.analysts else None
 
     # Reconfigure root logger to use Rich so log lines don't break the Live display
@@ -89,7 +91,7 @@ def main() -> None:
     _root.addHandler(_rich_handler)
 
     from src.broker.alpaca_client import AlpacaClient
-    from src.config import get_settings
+    from src.config import get_settings, refresh_settings
     from src.live.audit_journal import AuditJournal
     from src.live.risk_gate import RiskGate
     from src.live.runner import LiveRunner
@@ -122,6 +124,7 @@ def main() -> None:
     from src.llm.request import RunRequest
 
     run_request = RunRequest.from_agent_model_args(agent_model_args=getattr(args, "agent_models", None) or [])
+    run_request.validate_provider_keys(settings, global_model=args.model, global_provider=args.model_provider)
 
     runner = LiveRunner(
         tickers=tickers,
@@ -188,6 +191,12 @@ def main() -> None:
         log.info("Skipping this run (skip_until_continue command active).")
         return
 
+    # Pre-flight: KILL_SWITCH — reload settings so a mid-day .env flip takes effect
+    _live_settings = refresh_settings()
+    if _live_settings.KILL_SWITCH:
+        log.warning("KILL_SWITCH is active — aborting before agent graph.")
+        return
+
     # Step 1: sync portfolio + run agents
     print("Running agent graph…")
     decisions, snapshot = runner.prepare()
@@ -239,35 +248,33 @@ def main() -> None:
     _approval_reason: str = "confirmed"
     if args.require_approval:
         if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
-            log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — auto-submitting.")
-            _approval_reason = "telegram_unconfigured"
-        else:
-            tg = TelegramClient(
-                token=settings.TELEGRAM_BOT_TOKEN,
-                chat_id=settings.TELEGRAM_CHAT_ID,
-            )
-            text = tg.format_decisions_table(decisions, latest_prices)
-            try:
-                msg_id = tg.send_approval_request(text)
-                decision = tg.wait_for_decision(msg_id, timeout_seconds=settings.TELEGRAM_APPROVAL_TIMEOUT_SECONDS)
-            except Exception as exc:
-                log.error("Telegram error: %s — auto-submitting.", exc)
-                decision = "approve"
-                _approval_reason = f"telegram_error: {exc}"
-            else:
-                if decision == "reject":
-                    print("Rejected via Telegram — no orders submitted.")
-                    for ticker, d in decisions.items():
-                        journal.record(
-                            ticker=ticker,
-                            action=d.get("action", "hold"),
-                            qty=float(d.get("quantity", 0)),
-                            side=d.get("action", "hold"),
-                            status="rejected",
-                            reason="telegram_reject",
-                        )
-                    return
-                _approval_reason = "telegram_approved" if decision == "approve" else "telegram_timeout"
+            log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — cannot request approval; aborting.")
+            return  # fail-closed: missing creds means no human reviewed the orders
+        tg = TelegramClient(
+            token=settings.TELEGRAM_BOT_TOKEN,
+            chat_id=settings.TELEGRAM_CHAT_ID,
+        )
+        text = tg.format_decisions_table(decisions, latest_prices)
+        try:
+            msg_id = tg.send_approval_request(text)
+            decision = tg.wait_for_decision(msg_id, timeout_seconds=settings.TELEGRAM_APPROVAL_TIMEOUT_SECONDS)
+        except Exception as exc:
+            log.error("Telegram error: %s — aborting for safety.", exc)
+            return  # fail-closed: unknown Telegram state means no human confirmed
+        if decision != "approve":
+            reason = "telegram_reject" if decision == "reject" else "telegram_timeout"
+            print(f"{'Rejected' if decision == 'reject' else 'Timed out'} via Telegram — no orders submitted.")
+            for ticker, d in decisions.items():
+                journal.record(
+                    ticker=ticker,
+                    action=d.get("action", "hold"),
+                    qty=float(d.get("quantity", 0)),
+                    side=d.get("action", "hold"),
+                    status="rejected",
+                    reason=reason,
+                )
+            return
+        _approval_reason = "telegram_approved"
 
     elif args.auto_submit:
         _approval_reason = "auto_submitted"
@@ -278,19 +285,8 @@ def main() -> None:
             print("Aborted.")
             sys.exit(0)
 
-    # Step 6: execute
+    # Step 6: execute — executor writes its own journal records (pending → submitted/error)
     execution_results = runner.execute(decisions)
-
-    if args.require_approval or args.auto_submit:
-        for ticker, d in decisions.items():
-            journal.record(
-                ticker=ticker,
-                action=d.get("action", "hold"),
-                qty=float(d.get("quantity", 0)),
-                side=d.get("action", "hold"),
-                status="submitted",
-                reason=_approval_reason,
-            )
 
     print("\nExecution results:")
     print(f"{'Ticker':<10} {'Result'}")

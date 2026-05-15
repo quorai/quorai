@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 
 from src.config import get_settings
+from src.data.backtest_store import _earliest_available, get_backtest_store
 from src.data.cache import get_cache
 from src.data.models import (
     CompanyNews,
@@ -182,6 +183,9 @@ def _date_to_unix(date_str: str) -> int:
 
 def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> list[Price]:
     """Fetch daily OHLCV price data from cache or yfinance."""
+    if (hit := get_backtest_store().slice_prices(ticker, start_date, end_date)) is not None:
+        return hit
+
     cache_key = f"{ticker}_{start_date}_{end_date}"
 
     if cached_data := _cache.get_prices(cache_key):
@@ -307,10 +311,14 @@ def get_financial_metrics(
     api_key: str = None,
 ) -> list[FinancialMetrics]:
     """Fetch financial metrics via yfinance."""
+    if (hit := get_backtest_store().slice_financial_metrics(ticker, period, end_date, limit)) is not None:
+        return hit
+
     cache_key = f"{ticker}_{period}_{end_date}_{limit}"
 
     if cached_data := _cache.get_financial_metrics(cache_key):
-        return [FinancialMetrics(**metric) for metric in cached_data]
+        metrics = [FinancialMetrics(**metric) for metric in cached_data]
+        return [m for m in metrics if _earliest_available(m.report_period, m.period) <= end_date]
 
     from src.tools._yfinance_fundamentals import fetch_statements
 
@@ -331,6 +339,7 @@ def get_financial_metrics(
         if curr.earnings_per_share is not None and prev.earnings_per_share:
             curr.earnings_per_share_growth = (curr.earnings_per_share - prev.earnings_per_share) / abs(prev.earnings_per_share)
 
+    metrics = [m for m in metrics if _earliest_available(m.report_period, m.period) <= end_date]
     _cache.set_financial_metrics(cache_key, [m.model_dump() for m in metrics])
     return metrics
 
@@ -382,10 +391,14 @@ def search_line_items(
     api_key: str = None,
 ) -> list[LineItem]:
     """Fetch financial line items via yfinance."""
+    if (hit := get_backtest_store().slice_line_items(ticker, period, end_date, limit)) is not None:
+        return hit
+
     fields_key = ",".join(sorted(line_items))
     cache_key = f"{ticker}_{period}_{end_date}_{limit}_{fields_key}"
     if cached_data := _cache.get_line_items(cache_key):
-        return [LineItem(**item) for item in cached_data]
+        items = [LineItem(**item) for item in cached_data]
+        return [li for li in items if _earliest_available(li.report_period, li.period) <= end_date]
 
     from src.tools._yfinance_fundamentals import fetch_statements
 
@@ -428,6 +441,7 @@ def search_line_items(
 
         output.append(LineItem(**item_data))
 
+    output = [li for li in output if _earliest_available(li.report_period, li.period) <= end_date]
     _cache.set_line_items(cache_key, [item.model_dump() for item in output])
     return output
 
@@ -440,6 +454,9 @@ def get_insider_trades(
     api_key: str = None,
 ) -> list[InsiderTrade]:
     """Fetch insider trades from cache or Finnhub /stock/insider-transactions."""
+    if (hit := get_backtest_store().slice_insider_trades(ticker, start_date, end_date, limit)) is not None:
+        return hit
+
     cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
 
     if cached_data := _cache.get_insider_trades(cache_key):
@@ -524,6 +541,9 @@ def get_company_news(
     api_key: str = None,
 ) -> list[CompanyNews]:
     """Fetch company news from cache or Finnhub /company-news."""
+    if (hit := get_backtest_store().slice_company_news(ticker, start_date, end_date, limit)) is not None:
+        return hit
+
     cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
 
     if cached_data := _cache.get_company_news(cache_key):
@@ -592,6 +612,9 @@ def get_market_cap(
     api_key: str = None,
 ) -> float | None:
     """Return market cap for ticker on or near end_date, using yfinance."""
+    if (hit := get_backtest_store().market_cap(ticker, end_date)) is not None:
+        return hit
+
     cache_key = f"{ticker}_{end_date}"
     cached = _cache.get_market_cap(cache_key)
     if cached is not None:
@@ -666,6 +689,9 @@ def get_sec_filings_as_news(
     user_agent: str | None = None,
 ) -> list[CompanyNews]:
     """Fetch SEC EDGAR filing entries for a ticker and return them as CompanyNews items."""
+    if (hit := get_backtest_store().slice_sec_news(ticker, start_date, end_date, limit)) is not None:
+        return hit
+
     ua = user_agent or get_settings().SEC_USER_AGENT
     cik = get_cik(ticker, ua)
     if not cik:
