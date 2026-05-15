@@ -24,7 +24,7 @@ class TelegramClient:
         return f"{self._base_url}/bot{self._token}/{method}"
 
     def format_decisions_table(self, decisions: dict, latest_prices: dict[str, float]) -> str:
-        lines = ["*Proposed Orders*", "", "Ticker | Action | Qty | Price", "------ | ------ | --- | -----"]
+        lines = ["Proposed Orders:", "", "Ticker | Action | Qty | Price", "------ | ------ | --- | -----"]
         for ticker, decision in decisions.items():
             action = getattr(decision, "action", str(decision))
             qty = getattr(decision, "quantity", "—")
@@ -46,7 +46,6 @@ class TelegramClient:
             json={
                 "chat_id": self._chat_id,
                 "text": text,
-                "parse_mode": "Markdown",
                 "reply_markup": reply_markup,
             },
         )
@@ -77,7 +76,19 @@ class TelegramClient:
         return [u["message"]["text"] for u in updates if u.get("message", {}).get("text")]
 
     def wait_for_decision(self, message_id: int, timeout_seconds: int) -> Literal["approve", "reject", "timeout"]:
-        self._next_offset = 0
+        # Prime the offset past any existing updates so stale callbacks from a
+        # prior run's approval prompt are never replayed as a decision for this cycle.
+        prime = self._client.get(
+            self._url("getUpdates"),
+            params={"offset": -1, "timeout": 0, "allowed_updates": ["callback_query"]},
+            timeout=5,
+        )
+        prime.raise_for_status()
+        prime_updates = prime.json().get("result", [])
+        if prime_updates:
+            self._next_offset = max(u["update_id"] for u in prime_updates) + 1
+        else:
+            self._next_offset = 0
         start = time.monotonic()
 
         while True:

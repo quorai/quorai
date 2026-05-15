@@ -226,17 +226,24 @@ def _fetch_ttm(yf_ticker, ticker: str, end_date: str, limit: int) -> list[Statem
     most_recent = ttm_cols[0]
     period_end = most_recent.strftime("%Y-%m-%d")
 
+    _TTM_QUARTERS = 4
     income: dict[str, float | None] = {}
     for field_name, labels in _YF_INCOME.items():
         total = 0.0
-        found_any = False
+        found_quarters = 0
         for col in ttm_cols:
             if col in df_income.columns:
                 val = _lookup(df_income, col, labels)
                 if val is not None:
                     total += val
-                    found_any = True
-        income[field_name] = total if found_any else None
+                    found_quarters += 1
+        if found_quarters == 0:
+            income[field_name] = None
+        elif found_quarters < _TTM_QUARTERS:
+            logger.warning("TTM for %s %s: only %d/4 quarters available, skipping", ticker, field_name, found_quarters)
+            income[field_name] = None
+        else:
+            income[field_name] = total
     income["period_end"] = period_end
 
     # Balance: use the most recent quarter's values (stock items, not summed)
@@ -251,13 +258,19 @@ def _fetch_ttm(yf_ticker, ticker: str, end_date: str, limit: int) -> list[Statem
     cashflow: dict[str, float | None] = {}
     for field_name, labels in _YF_CASHFLOW.items():
         total = 0.0
-        found_any = False
+        found_quarters = 0
         for col in cf_cols:
             val = _lookup(df_cashflow, col, labels)
             if val is not None:
                 total += val
-                found_any = True
-        cashflow[field_name] = total if found_any else None
+                found_quarters += 1
+        if found_quarters == 0:
+            cashflow[field_name] = None
+        elif found_quarters < _TTM_QUARTERS:
+            logger.warning("TTM for %s %s: only %d/4 quarters available, skipping", ticker, field_name, found_quarters)
+            cashflow[field_name] = None
+        else:
+            cashflow[field_name] = total
     cashflow["period_end"] = period_end
 
     ttm_bundle = StatementBundle(
@@ -370,6 +383,11 @@ def get_yfinance_news(
     yfinance returns the ~10-20 most recent items regardless of date range, so
     filtering is done client-side after fetch.
     """
+    from src.data.backtest_store import get_backtest_store
+
+    if (hit := get_backtest_store().slice_yfinance_news(ticker, start_date, end_date, limit)) is not None:
+        return hit
+
     yf_ticker = _get_ticker(ticker)
     if yf_ticker is None:
         return []

@@ -52,13 +52,17 @@ def _make_yf_ticker(income_data: dict | None = None, balance_data: dict | None =
 
 class TestGetPrices:
     def test_get_prices_returns_price_list(self):
-        """Cache hit returns correctly typed Price objects."""
+        """Cache hit returns correctly typed Price objects.
+
+        end_date (2024-01-05) is within 5 days of max_cached (2024-01-03) so the
+        cache hit is accepted without a re-download.
+        """
         cached = [
             {"open": 100.0, "close": 105.0, "high": 106.0, "low": 99.0, "volume": 1_000_000, "time": "2024-01-02T00:00:00"},
             {"open": 105.0, "close": 110.0, "high": 111.0, "low": 104.0, "volume": 1_100_000, "time": "2024-01-03T00:00:00"},
         ]
         with patch("src.tools.api._cache.get_prices", return_value=cached):
-            result = get_prices("AAPL", "2024-01-01", "2024-01-31")
+            result = get_prices("AAPL", "2024-01-01", "2024-01-05")
 
         assert len(result) == 2
         assert all(isinstance(p, Price) for p in result)

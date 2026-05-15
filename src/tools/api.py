@@ -186,10 +186,18 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
     if (hit := get_backtest_store().slice_prices(ticker, start_date, end_date)) is not None:
         return hit
 
-    cache_key = f"{ticker}_{start_date}_{end_date}"
+    cache_key = f"prices_{ticker}"
 
     if cached_data := _cache.get_prices(cache_key):
-        return [Price(**price) for price in cached_data]
+        filtered = [p for p in cached_data if start_date <= p["time"][:10] <= end_date]
+        if filtered:
+            max_cached = max(p["time"][:10] for p in filtered)
+            end_dt_obj = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            max_dt_obj = datetime.datetime.strptime(max_cached, "%Y-%m-%d")
+            # Allow up to 5 calendar days gap: covers weekends, US holidays, and
+            # same-day requests before market close.
+            if (end_dt_obj - max_dt_obj).days <= 5:
+                return [Price(**price) for price in filtered]
 
     try:
         import yfinance as yf
@@ -218,7 +226,7 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
             )
 
         _cache.set_prices(cache_key, [p.model_dump() for p in prices])
-        return prices
+        return [p for p in prices if start_date <= p.time[:10] <= end_date]
     except Exception as e:
         logger.warning("Failed to fetch prices for %s from yfinance: %s", ticker, e)
         return []

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import math
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from src.backtesting.types import AgentDecisions
 from src.broker import Broker
@@ -16,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 _BUY_ACTIONS = {"buy", "cover"}
 _SELL_ACTIONS = {"sell", "short"}
+
+_TERMINAL_STATUSES = {"filled", "canceled", "expired", "rejected", "done_for_day", "stopped", "suspended", "replaced"}
 
 
 class LiveExecutor:
@@ -32,6 +36,8 @@ class LiveExecutor:
         self._journal = journal
         self._sod_equity = sod_equity
         self._idempotency_guard = idempotency_guard
+        # Populated by execute_decisions(); maps ticker → broker order ID for submitted orders.
+        self.submitted_orders: dict[str, str] = {}
 
     def execute_decisions(
         self,
@@ -40,9 +46,11 @@ class LiveExecutor:
         current_prices: dict[str, float] | None = None,
     ) -> dict[str, str]:
         """Execute decisions. Returns {ticker: "submitted"|"skipped"|"error: ..."}.
-        If dry_run=True, logs what would be submitted but does not call the API."""
+        If dry_run=True, logs what would be submitted but does not call the API.
+        Submitted broker order IDs are stored in self.submitted_orders after the call."""
         results: dict[str, str] = {}
         prices = current_prices or {}
+        self.submitted_orders = {}
 
         if not dry_run and self._idempotency_guard is not None:
             allowed, reason = self._idempotency_guard.check()
@@ -55,6 +63,15 @@ class LiveExecutor:
             for order in self._broker.get_open_orders():
                 if order.symbol is not None and order.side is not None:
                     pending.add((order.symbol, order.side.value))
+
+        # Pre-fetch current short positions once for cover qty clamping.
+        current_shorts: dict[str, float] = {}
+        has_cover = any(d.get("action") == "cover" for d in decisions.values())
+        if has_cover and not dry_run:
+            for pos in self._broker.get_positions():
+                qty = float(pos.qty)
+                if qty < 0:
+                    current_shorts[pos.symbol] = abs(qty)
 
         account_equity = 0.0
         if self._risk_gate and not dry_run:
@@ -69,16 +86,42 @@ class LiveExecutor:
                 results[ticker] = "skipped"
                 continue
 
+            # Alpaca requires whole shares for short/cover; floor with 0.6 threshold (0.5→0, 0.6→1)
+            if action in {"short", "cover"}:
+                qty = float(math.floor(qty + 0.4))
+                if qty == 0:
+                    logger.warning("[executor] %s %s qty rounds to 0, skipping", ticker, action)
+                    results[ticker] = "skipped (qty rounds to 0)"
+                    continue
+
             if action in _BUY_ACTIONS:
                 side = "buy"
+                if action == "cover" and not dry_run:
+                    actual_short = current_shorts.get(ticker, 0.0)
+                    if actual_short == 0.0:
+                        logger.warning("[executor] %s cover requested but no short position, skipping", ticker)
+                        if self._journal:
+                            self._journal.record(
+                                ticker=ticker,
+                                action=action,
+                                qty=qty,
+                                side="buy",
+                                status="skipped",
+                                reason="cover: no short to close",
+                            )
+                        results[ticker] = "skipped (cover: no short)"
+                        continue
+                    if qty > actual_short:
+                        logger.warning(
+                            "[executor] %s cover qty=%.3f clamped to actual short=%.3f",
+                            ticker,
+                            qty,
+                            actual_short,
+                        )
+                        qty = actual_short
             elif action in _SELL_ACTIONS:
                 side = "sell"
                 if action == "short":
-                    qty = float(math.floor(qty + 0.4))  # threshold 0.6: 0.5=>0, 0.6=>1
-                    if qty == 0:
-                        logger.warning("[executor] %s short qty rounds to 0, skipping", ticker)
-                        results[ticker] = "skipped (qty rounds to 0)"
-                        continue
                     if not dry_run:
                         asset = self._broker.get_asset(ticker)
                         if not asset.shortable:
@@ -117,8 +160,26 @@ class LiveExecutor:
                 results[ticker] = "submitted"
                 continue
 
+            # Deterministic client_order_id lets the broker reject a duplicate
+            # submission if we retry after a crash — the journal "pending" row
+            # written below provides a local crash-recovery audit trail.
+            date_prefix = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+            client_order_id = f"{date_prefix}-{ticker}-{side}"
+
+            if self._journal:
+                self._journal.record(
+                    ticker=ticker,
+                    action=action,
+                    qty=qty,
+                    side=side,
+                    status="pending",
+                    order_id=client_order_id,
+                )
+
             try:
-                order = self._broker.submit_order(ticker=ticker, side=side, qty=qty)
+                order = self._broker.submit_order(ticker=ticker, side=side, qty=qty, client_order_id=client_order_id)
+                broker_order_id = str(order.id)
+                self.submitted_orders[ticker] = broker_order_id
                 if self._journal:
                     self._journal.record(
                         ticker=ticker,
@@ -126,7 +187,7 @@ class LiveExecutor:
                         qty=qty,
                         side=side,
                         status="submitted",
-                        order_id=str(order.id),
+                        order_id=broker_order_id,
                     )
                 results[ticker] = "submitted"
             except Exception as exc:

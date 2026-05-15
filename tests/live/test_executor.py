@@ -200,3 +200,70 @@ def test_cover_skipped_when_no_short():
     results = executor.execute_decisions({"AAPL": {"action": "cover", "quantity": 3.0}})
     assert results["AAPL"] == "skipped (cover: no short)"
     broker.submit_order.assert_not_called()
+
+
+# R24 — cover qty whole-share flooring
+
+
+def test_cover_fractional_qty_above_threshold_rounds_to_one():
+    """cover qty=0.6 meets the 0.6 threshold and rounds to 1 whole share."""
+    pos = _make_position("AAPL", "-10")
+    broker = _make_broker(positions=[pos])
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "cover", "quantity": 0.6}})
+    assert results["AAPL"] == "submitted"
+    assert broker.submit_order.call_args.kwargs["qty"] == 1.0
+
+
+def test_cover_fractional_qty_below_threshold_is_skipped():
+    """cover qty=0.5 is below the 0.6 threshold, rounds to 0, and is skipped."""
+    pos = _make_position("AAPL", "-10")
+    broker = _make_broker(positions=[pos])
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "cover", "quantity": 0.5}})
+    assert "skipped" in results["AAPL"]
+    broker.submit_order.assert_not_called()
+
+
+def test_short_fractional_qty_rounds_consistently():
+    """short qty flooring behaves the same as cover: 0.6 → 1, 0.5 → skipped."""
+    broker = _make_broker()
+    executor = LiveExecutor(broker=broker)
+
+    results_ok = executor.execute_decisions({"AAPL": {"action": "short", "quantity": 0.6}})
+    assert results_ok["AAPL"] == "submitted"
+    assert broker.submit_order.call_args.kwargs["qty"] == 1.0
+
+    broker.submit_order.reset_mock()
+
+    results_skip = executor.execute_decisions({"AAPL": {"action": "short", "quantity": 0.5}})
+    assert "skipped" in results_skip["AAPL"]
+    broker.submit_order.assert_not_called()
+
+
+# R25 — NY date for client_order_id
+
+
+def test_client_order_id_uses_ny_date(tmp_path):
+    """client_order_id prefix must use NY date, not UTC, to avoid cross-midnight drift."""
+    from datetime import datetime
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    from src.live.audit_journal import AuditJournal
+
+    # 20:00 ET on Monday = 01:00 UTC Tuesday — NY date is Monday
+    ny_time = datetime(2024, 1, 15, 20, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    broker = _make_broker()
+    journal = AuditJournal(log_dir=str(tmp_path))
+    executor = LiveExecutor(broker=broker, journal=journal)
+
+    with patch("src.live.executor.datetime") as mock_dt:
+        mock_dt.now.return_value = ny_time
+        results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 1.0}})
+
+    assert results["AAPL"] == "submitted"
+    order_id = broker.submit_order.call_args.kwargs["client_order_id"]
+    # Must use 2024-01-15 (NY date), not 2024-01-16 (UTC date after midnight)
+    assert order_id.startswith("2024-01-15"), f"Got client_order_id: {order_id}"

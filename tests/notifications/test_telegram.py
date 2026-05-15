@@ -50,8 +50,9 @@ def _empty_updates() -> httpx.Response:
 
 def test_approve():
     responses = [
-        _send_message_resp(42),  # sendMessage
-        _updates_resp([_callback_update(1, 42, "approve")]),  # getUpdates
+        _send_message_resp(42),  # sendMessage (POST)
+        _empty_updates(),  # priming getUpdates(offset=-1) — no stale callbacks
+        _updates_resp([_callback_update(1, 42, "approve")]),  # poll getUpdates
         _ok({"ok": True}),  # answerCallbackQuery
         _ok({"ok": True}),  # editMessageText
     ]
@@ -65,6 +66,7 @@ def test_approve():
 def test_reject():
     responses = [
         _send_message_resp(42),
+        _empty_updates(),  # priming getUpdates(offset=-1)
         _updates_resp([_callback_update(1, 42, "reject")]),
         _ok({"ok": True}),
         _ok({"ok": True}),
@@ -79,7 +81,8 @@ def test_timeout():
     time_values = iter([0.0, 0.0, 100.0])
 
     responses = [
-        _empty_updates(),  # getUpdates with no results
+        _empty_updates(),  # priming getUpdates(offset=-1)
+        _empty_updates(),  # poll getUpdates — returns nothing
     ]
     client = _make_client(responses)
 
