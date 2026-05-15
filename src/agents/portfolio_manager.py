@@ -87,7 +87,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
     progress.update_status(agent_id, None, "Done")
 
     return {
-        "messages": state["messages"] + [message],
+        "messages": [message],
         "data": state["data"],
     }
 

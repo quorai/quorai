@@ -100,6 +100,7 @@ def warren_buffett_agent(state: AgentState, agent_id: str = "warren_buffett_agen
         total_score = fundamental_analysis["score"] + consistency_analysis["score"] + moat_analysis["score"] + mgmt_analysis["score"] + pricing_power_analysis["score"] + book_value_analysis["score"]
         max_possible_score = (
             10  # fundamental_analysis (ROE, debt, margins, current ratio)
+            + 3  # consistency (0-3)
             + moat_analysis["max_score"]
             + mgmt_analysis["max_score"]
             + 5  # pricing_power (0-5)

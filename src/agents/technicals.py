@@ -11,6 +11,8 @@ from src.utils.api_key import get_api_key_from_state
 from src.utils.concurrency import parallel_per_ticker
 from src.utils.progress import progress
 
+_MIN_PRICES = 126  # minimum rows required for 6-month momentum; shorter series returns neutral
+
 
 def safe_float(value, default=0.0):
     """
@@ -149,7 +151,7 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
     progress.update_status(agent_id, None, "Done")
 
     return {
-        "messages": state["messages"] + [message],
+        "messages": [message],
         "data": data,
     }
 
@@ -158,6 +160,8 @@ def calculate_trend_signals(prices_df):
     """
     Advanced trend following strategy using multiple timeframes and indicators
     """
+    if len(prices_df) < _MIN_PRICES:
+        return {"signal": "neutral", "confidence": 0, "metrics": {"reason": "insufficient_data"}}
     # Calculate EMAs for multiple timeframes
     ema_8 = calculate_ema(prices_df, 8)
     ema_21 = calculate_ema(prices_df, 21)
@@ -197,6 +201,8 @@ def calculate_mean_reversion_signals(prices_df):
     """
     Mean reversion strategy using statistical measures and Bollinger Bands
     """
+    if len(prices_df) < _MIN_PRICES:
+        return {"signal": "neutral", "confidence": 0, "metrics": {"reason": "insufficient_data"}}
     # Calculate z-score of price relative to moving average
     ma_50 = prices_df["close"].rolling(window=50).mean()
     std_50 = prices_df["close"].rolling(window=50).std()
@@ -239,6 +245,8 @@ def calculate_momentum_signals(prices_df):
     """
     Multi-factor momentum strategy
     """
+    if len(prices_df) < _MIN_PRICES:
+        return {"signal": "neutral", "confidence": 0, "metrics": {"reason": "insufficient_data"}}
     # Price momentum
     returns = prices_df["close"].pct_change()
     mom_1m = returns.rolling(21).sum()
@@ -284,6 +292,8 @@ def calculate_volatility_signals(prices_df):
     """
     Volatility-based trading strategy
     """
+    if len(prices_df) < _MIN_PRICES:
+        return {"signal": "neutral", "confidence": 0, "metrics": {"reason": "insufficient_data"}}
     # Calculate various volatility metrics
     returns = prices_df["close"].pct_change()
 
@@ -331,6 +341,8 @@ def calculate_stat_arb_signals(prices_df):
     """
     Statistical arbitrage signals based on price action analysis
     """
+    if len(prices_df) < _MIN_PRICES:
+        return {"signal": "neutral", "confidence": 0, "metrics": {"reason": "insufficient_data"}}
     # Calculate price distribution statistics
     returns = prices_df["close"].pct_change()
 

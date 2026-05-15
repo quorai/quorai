@@ -76,19 +76,22 @@ def test_apply_short_open_partial_when_insufficient_margin_cash() -> None:
 def test_apply_short_open_uses_available_cash_not_total_cash() -> None:
     p = Portfolio(tickers=["AAPL"], initial_cash=1_000.0, margin_requirement=0.5)
 
-    # First short consumes all free margin but increases total cash with proceeds.
+    # First short (10 @ $100): proceeds=$1000, margin=$500.
+    # After: cash = 1000 + 1000 - 500 = 1500; margin_used = 500.
     first = p.apply_short_open("AAPL", 10, 100.0)
     assert first == 10
+    assert p.get_cash() == pytest.approx(1_500.0)
+    assert p.get_margin_used() == pytest.approx(500.0)
 
-    # Available cash should still be 1,000 (cash 1,500 - margin_used 500),
-    # so max additional quantity at $100 with 50% margin is 20 shares.
+    # available_cash = cash = 1500 (cash already reflects the haircut; no double-subtract).
+    # max_qty = 1500 / (100 * 0.5) = 30, so the full 30-share request fills.
     second = p.apply_short_open("AAPL", 30, 100.0)
-    assert second == 20
+    assert second == 30
 
     snap = p.get_snapshot()
     pos = snap["positions"]["AAPL"]
-    assert pos["short"] == 30
-    assert snap["margin_used"] == pytest.approx(1_500.0)
+    assert pos["short"] == pytest.approx(40.0)  # 10 + 30
+    assert snap["margin_used"] == pytest.approx(2_000.0)  # (10 + 30) * 100 * 0.5
 
 
 def test_apply_short_cover_realized_gain_and_margin_release(portfolio: Portfolio) -> None:

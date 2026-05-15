@@ -299,7 +299,7 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
     Ackman invests in companies trading at a discount to intrinsic value.
     Uses a simplified DCF with FCF as a proxy, plus margin of safety analysis.
     """
-    if not financial_line_items or market_cap is None:
+    if not financial_line_items or not market_cap or market_cap <= 0:
         return {"score": 0, "details": "Insufficient data to perform valuation"}
 
     # Since financial_line_items are in descending order (newest first),

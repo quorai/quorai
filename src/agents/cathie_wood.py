@@ -336,7 +336,7 @@ def analyze_cathie_wood_valuation(financial_line_items: list, market_cap: float)
     a simplified approach looking for a large total addressable market (TAM) and the
     company's ability to capture a sizable portion.
     """
-    if not financial_line_items or market_cap is None:
+    if not financial_line_items or not market_cap or market_cap <= 0:
         return {"score": 0, "details": "Insufficient data for valuation"}
 
     latest = financial_line_items[0]

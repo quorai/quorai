@@ -135,11 +135,7 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
         for m, vals in method_values.items():
             if vals["value"] > 0:
                 base_details = f"Value: ${vals['value']:,.2f}, Market Cap: ${market_cap:,.2f}, Gap: {vals['gap']:.1%}, Weight: {vals['weight'] * 100:.0f}%"
-                enhanced_details = (
-                    f"{base_details}\n  WACC: {wacc:.1%}, Bear: ${dcf_results['downside']:,.2f}, Bull: ${dcf_results['upside']:,.2f}, Range: ${dcf_results['range']:,.2f}"
-                    if m == "dcf"
-                    else base_details
-                )
+                enhanced_details = f"{base_details}\n  WACC: {wacc:.1%}, Bear: ${dcf_results['downside']:,.2f}, Bull: ${dcf_results['upside']:,.2f}, Range: ${dcf_results['range']:,.2f}" if m == "dcf" else base_details
                 reasoning[f"{m}_analysis"] = {
                     "signal": ("bullish" if vals["gap"] and vals["gap"] > 0.15 else "bearish" if vals["gap"] and vals["gap"] < -0.15 else "neutral"),
                     "details": enhanced_details,
@@ -194,7 +190,8 @@ def calculate_owner_earnings_value(
     if not all(isinstance(x, (int, float)) for x in [net_income, depreciation, capex, working_capital_change]):
         return 0
 
-    owner_earnings = net_income + depreciation - capex - working_capital_change
+    # capex from cash-flow statements is conventionally negative (outflow); abs() normalizes both conventions.
+    owner_earnings = net_income + depreciation - abs(capex) - working_capital_change
     if owner_earnings <= 0:
         return 0
 

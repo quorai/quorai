@@ -127,7 +127,9 @@ class Portfolio:
         proceeds = price * quantity
         margin_ratio = self._portfolio["margin_requirement"]
         margin_required = proceeds * margin_ratio
-        available_cash = max(0.0, self._portfolio["cash"] - self._portfolio["margin_used"])
+        # cash already reflects the margin haircut (cash -= margin_required on each short open),
+        # so subtracting margin_used again would double-count it.
+        available_cash = max(0.0, self._portfolio["cash"])
         if margin_required <= available_cash:
             old_short_shares = position["short"]
             old_cost_basis = position["short_cost_basis"]
