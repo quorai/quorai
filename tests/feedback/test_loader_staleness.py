@@ -1,11 +1,9 @@
 """Tests for weights.json staleness warning in load_weights."""
 
 import json
+import logging
 import os
 import time
-import logging
-
-import pytest
 
 
 def test_fresh_file_no_warning(tmp_path, caplog):
@@ -13,6 +11,7 @@ def test_fresh_file_no_warning(tmp_path, caplog):
     weights_file.write_text(json.dumps({"agent_a": 1.2}))
 
     import importlib
+
     import src.feedback.loader as loader_mod
 
     importlib.reload(loader_mod)
@@ -33,6 +32,7 @@ def test_stale_file_emits_warning(tmp_path, caplog):
     os.utime(str(weights_file), (stale_mtime, stale_mtime))
 
     import importlib
+
     import src.feedback.loader as loader_mod
 
     importlib.reload(loader_mod)
@@ -56,6 +56,7 @@ def test_env_override_threshold(tmp_path, caplog, monkeypatch):
     monkeypatch.setenv("QUORAI_WEIGHTS_MAX_AGE_DAYS", "3")
 
     import importlib
+
     import src.feedback.loader as loader_mod
 
     importlib.reload(loader_mod)

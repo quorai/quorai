@@ -9,11 +9,13 @@ from src.risk_profiles import get_profile
 def _apply_profile_to_settings(profile_name: str) -> Settings:
     profile = get_profile(profile_name)
     base = Settings(ALPACA_API_KEY="x", ALPACA_SECRET_KEY="x")
-    return base.model_copy(update={
-        "MAX_ORDER_NOTIONAL": profile.max_order_notional,
-        "MAX_ORDER_QTY": profile.max_order_qty,
-        "DAILY_LOSS_LIMIT_PCT": profile.daily_loss_limit_pct,
-    })
+    return base.model_copy(
+        update={
+            "MAX_ORDER_NOTIONAL": profile.max_order_notional,
+            "MAX_ORDER_QTY": profile.max_order_qty,
+            "DAILY_LOSS_LIMIT_PCT": profile.daily_loss_limit_pct,
+        }
+    )
 
 
 def test_conservative_caps_applied(tmp_path):

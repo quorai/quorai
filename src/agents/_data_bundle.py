@@ -6,6 +6,16 @@ from dataclasses import dataclass, field
 import re
 
 from src.data.models import CompanyNews, FinancialMetrics, InsiderTrade, LineItem, Price
+from src.tools._yfinance_fundamentals import get_yfinance_news
+from src.tools.api import (
+    get_company_news,
+    get_financial_metrics,
+    get_insider_trades,
+    get_market_cap,
+    get_prices,
+    get_sec_filings_as_news,
+    search_line_items,
+)
 
 # Union of every line_item_names list used across all personality agents.
 # The backtest pre-fetcher uses this to populate the in-memory store once;
@@ -42,16 +52,6 @@ ALL_LINE_ITEMS: list[str] = [
     "total_liabilities",
     "working_capital",
 ]
-from src.tools._yfinance_fundamentals import get_yfinance_news
-from src.tools.api import (
-    get_company_news,
-    get_financial_metrics,
-    get_insider_trades,
-    get_market_cap,
-    get_prices,
-    get_sec_filings_as_news,
-    search_line_items,
-)
 
 
 def _normalize_title(title: str) -> str:

@@ -2,8 +2,8 @@
 
 import threading
 
-from src.utils.llm import get_token_log, get_token_summary, reset_token_log
 import src.utils.llm as llm_module
+from src.utils.llm import get_token_log, get_token_summary, reset_token_log
 
 
 def _append_entry(label: str) -> dict:

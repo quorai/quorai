@@ -1,7 +1,6 @@
 """Tests for TTM partial-quarter handling in _yfinance_fundamentals._fetch_ttm."""
 
 import logging
-from datetime import datetime
 from unittest.mock import MagicMock
 
 import pandas as pd

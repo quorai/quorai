@@ -1,6 +1,6 @@
 """Tests for ticker-level price cache key (prevents range-based fragmentation)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.data.cache import Cache
 

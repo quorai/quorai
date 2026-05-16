@@ -379,12 +379,7 @@ Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
 |---|---|
 | CLI | `uv run python src/main.py --tickers AAPL,MSFT` |
 | Backtest | `uv run python -m src.backtesting --tickers AAPL,MSFT --model <model>` |
-| GitHub Pages | Static site at `docs/` — three tabs: Agents gallery, Trading Flow diagram, About |
 | Docker | Planned — not yet present in the repository |
-
-The static site (`docs/`) is built by `scripts/build_site.py`, which generates `docs/agents.json`
-and `docs/flow.json` from `ANALYST_CONFIG` in `src/utils/analysts.py`. The three-tab layout
-(`index.html` + `app.js` + `style.css`) is fully static — no build step required for the HTML/JS/CSS.
 
 ---
 

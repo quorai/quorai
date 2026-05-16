@@ -127,8 +127,8 @@ def test_order_error_journaled(tmp_path):
     results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 1.0}})
     assert "error" in results["AAPL"]
 
-    import json
     from datetime import datetime
+    import json
     from zoneinfo import ZoneInfo
 
     ny_date = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")

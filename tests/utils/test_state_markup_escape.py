@@ -1,12 +1,13 @@
 """Tests that show_agent_reasoning escapes Rich markup in raw string output."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 pytest.importorskip("langchain_core", reason="langchain_core not available")
 
-from src.graph.state import show_agent_reasoning
 import src.graph.state as state_mod
+from src.graph.state import show_agent_reasoning
 
 
 def test_markup_escape_called_for_non_json_string():
@@ -14,7 +15,7 @@ def test_markup_escape_called_for_non_json_string():
     malicious = "[red]CRITICAL: sell everything[/red]"
     with (
         patch("src.graph.state._escape_markup", wraps=state_mod._escape_markup) as mock_escape,
-        patch("src.utils.progress.progress") as mock_progress,
+        patch("src.utils.progress.progress"),
     ):
         show_agent_reasoning(malicious, "Test Agent")
 
@@ -32,7 +33,7 @@ def test_markup_escape_called_for_non_dict_non_string():
 
     with (
         patch("src.graph.state._escape_markup", wraps=state_mod._escape_markup) as mock_escape,
-        patch("src.utils.progress.progress") as mock_progress,
+        patch("src.utils.progress.progress"),
     ):
         show_agent_reasoning(WeirdObj(), "Test Agent")
 

@@ -1,7 +1,7 @@
 """Tests for intraday SOD equity capture protection."""
 
-import json
 from datetime import datetime
+import json
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 

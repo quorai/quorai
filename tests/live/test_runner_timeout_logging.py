@@ -53,9 +53,7 @@ class TestRunnerTimeoutLogging:
 
         # Must emit a WARNING mentioning timeout and manual review
         warning_texts = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("manual review" in t.lower() for t in warning_texts), (
-            f"Expected a warning mentioning 'manual review' for reconciler timeout. Got: {warning_texts}"
-        )
+        assert any("manual review" in t.lower() for t in warning_texts), f"Expected a warning mentioning 'manual review' for reconciler timeout. Got: {warning_texts}"
 
     def test_filled_status_does_not_emit_timeout_warning(self, caplog):
         """Successful fills must not emit spurious timeout warnings."""

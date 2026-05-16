@@ -55,7 +55,6 @@ def test_warning_logged_when_position_closes(caplog):
 
 def test_no_warning_when_position_unchanged(caplog):
     """No WARNING if the ticker still has a position in the new snapshot."""
-    from alpaca.trading.models import Position
 
     prev: PortfolioSnapshot = {
         "cash": 50000.0,

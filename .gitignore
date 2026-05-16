@@ -50,7 +50,6 @@ Thumbs.db
 
 # Txt files
 *.txt
-!docs/robots.txt
 
 # PDF files
 *.pdf
@@ -76,9 +75,6 @@ logs/
 app/backend/alembic/versions/__pycache__/
 .ai/
 CLAUDE.md
-AGENTS.md
-IMPROVEMENTS.md
-backtest.md
 
 # Claude Code project settings (personal)
 .claude/

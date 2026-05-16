@@ -101,11 +101,13 @@ def main() -> None:
     from src.risk_profiles import get_profile
 
     profile = get_profile(args.risk_profile)
-    settings = get_settings().model_copy(update={
-        "MAX_ORDER_NOTIONAL": profile.max_order_notional,
-        "MAX_ORDER_QTY": profile.max_order_qty,
-        "DAILY_LOSS_LIMIT_PCT": profile.daily_loss_limit_pct,
-    })
+    settings = get_settings().model_copy(
+        update={
+            "MAX_ORDER_NOTIONAL": profile.max_order_notional,
+            "MAX_ORDER_QTY": profile.max_order_qty,
+            "DAILY_LOSS_LIMIT_PCT": profile.daily_loss_limit_pct,
+        }
+    )
     log = logging.getLogger(__name__)
     log.info("Risk profile: %s (base_limit=%.2f, notional_cap=$%.0f)", profile.name, profile.base_limit, profile.max_order_notional)
     broker = AlpacaClient()

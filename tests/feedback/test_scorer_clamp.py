@@ -1,9 +1,6 @@
 """Tests that compute_weights clamps per-agent conviction weights to [min, max]."""
 
 import json
-import os
-
-import pytest
 
 
 def _write_labeled_log(tmp_path, records: list[dict]) -> str:
@@ -24,6 +21,7 @@ class TestWeightClamping:
         monkeypatch.setenv("QUORAI_AGENT_WEIGHT_MIN", "0.1")
         # Reload module-level constants from fresh env
         import importlib
+
         import src.feedback.scorer as scorer_mod
 
         importlib.reload(scorer_mod)
@@ -46,6 +44,7 @@ class TestWeightClamping:
         monkeypatch.setenv("QUORAI_AGENT_WEIGHT_MAX", "3.0")
         monkeypatch.setenv("QUORAI_AGENT_WEIGHT_MIN", "0.1")
         import importlib
+
         import src.feedback.scorer as scorer_mod
 
         importlib.reload(scorer_mod)
@@ -67,6 +66,7 @@ class TestWeightClamping:
         monkeypatch.setenv("QUORAI_AGENT_WEIGHT_MAX", "2.0")
         monkeypatch.setenv("QUORAI_AGENT_WEIGHT_MIN", "0.1")
         import importlib
+
         import src.feedback.scorer as scorer_mod
 
         importlib.reload(scorer_mod)

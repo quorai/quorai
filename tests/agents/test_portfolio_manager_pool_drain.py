@@ -34,10 +34,7 @@ class TestPortfolioManagerPoolDrain:
         assert aapl_buy == pytest.approx(60.0)  # AAPL limited by max_shares=60
 
         # MSFT can only buy with cash remaining after AAPL's max allocation ($6k used → $4k left)
-        assert msft_buy <= 40.0, (
-            f"MSFT max_buy should be ≤ 40 shares ($4k remaining), got {msft_buy}. "
-            "Double-spend bug: both tickers saw the full $10k pool."
-        )
+        assert msft_buy <= 40.0, f"MSFT max_buy should be ≤ 40 shares ($4k remaining), got {msft_buy}. Double-spend bug: both tickers saw the full $10k pool."
 
     def test_combined_buy_notional_does_not_exceed_cash(self):
         """Sum of all max_buy × price must not exceed initial cash."""
@@ -48,9 +45,7 @@ class TestPortfolioManagerPoolDrain:
         allowed = compute_allowed_actions(["AAPL", "MSFT", "GOOG"], prices, max_shares, portfolio)
 
         total_notional = sum(allowed[t].get("buy", 0) * prices[t] for t in ["AAPL", "MSFT", "GOOG"])
-        assert total_notional <= 10_000.0 + 1e-9, (
-            f"Combined buy notional {total_notional:.2f} exceeds cash 10_000. Double-spend bug."
-        )
+        assert total_notional <= 10_000.0 + 1e-9, f"Combined buy notional {total_notional:.2f} exceeds cash 10_000. Double-spend bug."
 
     def test_short_margin_not_double_spent(self):
         """
@@ -67,9 +62,7 @@ class TestPortfolioManagerPoolDrain:
         aapl_short = allowed["AAPL"].get("short", 0)
         msft_short = allowed["MSFT"].get("short", 0)
         combined_margin = (aapl_short + msft_short) * 100.0 * 0.5
-        assert combined_margin <= 10_000.0 + 1e-9, (
-            f"Combined margin {combined_margin:.2f} exceeds equity 10_000. Short double-spend bug."
-        )
+        assert combined_margin <= 10_000.0 + 1e-9, f"Combined margin {combined_margin:.2f} exceeds equity 10_000. Short double-spend bug."
 
     def test_first_ticker_unaffected_when_cash_is_ample(self):
         """When cash comfortably covers the first ticker's max, its allocation is unchanged."""
