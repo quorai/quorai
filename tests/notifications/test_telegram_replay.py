@@ -97,3 +97,42 @@ def test_timeout_when_no_decision(monkeypatch):
 
     result = client.wait_for_decision(message_id=99, timeout_seconds=1)
     assert result == "timeout"
+
+
+def test_no_prime_updates_does_not_reset_offset_to_zero():
+    """
+    R47: When the prime call returns no updates, _next_offset must NOT be reset to 0.
+    Before the fix: `else: self._next_offset = 0` caused the next poll to fetch from
+    update_id=0, replaying the bot's entire history of callbacks.
+    After the fix: the offset retains its prior monotonic value.
+    """
+    client = _make_client()
+    client._next_offset = 500  # simulate a previously-advanced offset
+
+    poll_offsets: list[int] = []
+
+    def fake_get(url, params=None, timeout=None):
+        offset = params.get("offset", 0) if params else 0
+        if offset == -1:
+            return _make_response([])  # no prime updates
+        poll_offsets.append(offset)
+        # Return an approval so the loop ends immediately
+        return _make_response(
+            [
+                {
+                    "update_id": 501,
+                    "callback_query": {
+                        "id": "cq-r47",
+                        "message": {"message_id": 77},
+                        "data": "approve",
+                    },
+                }
+            ]
+        )
+
+    client._client.get = fake_get
+    client._client.post = MagicMock(return_value=_make_response([]))
+
+    client.wait_for_decision(message_id=77, timeout_seconds=30)
+
+    assert all(o >= 500 for o in poll_offsets), f"After empty prime, poll offsets must stay >= prior value 500 (no reset to 0). Got: {poll_offsets}"

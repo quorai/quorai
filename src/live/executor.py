@@ -118,7 +118,11 @@ class LiveExecutor:
                             qty,
                             actual_short,
                         )
-                        qty = actual_short
+                        qty = float(math.floor(actual_short))
+                        if qty == 0:
+                            logger.warning("[executor] %s cover qty rounds to 0 after floor, skipping", ticker)
+                            results[ticker] = "skipped (cover qty rounds to 0)"
+                            continue
             elif action in _SELL_ACTIONS:
                 side = "sell"
                 if action == "short":

@@ -35,7 +35,7 @@ def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analys
 
         transaction_shares = pd.Series([t.transaction_shares for t in insider_trades]).dropna()
         bearish_count = int((transaction_shares < 0).sum())
-        bullish_count = int((transaction_shares >= 0).sum())
+        bullish_count = int((transaction_shares > 0).sum())
         total_signals = len(transaction_shares)
 
         if bullish_count > bearish_count:

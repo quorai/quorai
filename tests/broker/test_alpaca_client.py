@@ -61,3 +61,36 @@ def test_cancel_order_calls_cancel_by_id():
     client = _make_client()
     client.cancel_order("order-abc")
     client._client.cancel_order_by_id.assert_called_once_with("order-abc")
+
+
+def test_is_market_open_today_false_when_closed():
+    client = _make_client()
+    clock = MagicMock()
+    clock.is_open = False
+    client._client.get_clock.return_value = clock
+    assert client.is_market_open_today() is False
+
+
+def test_is_market_open_today_true_when_open():
+    client = _make_client()
+    clock = MagicMock()
+    clock.is_open = True
+    client._client.get_clock.return_value = clock
+    assert client.is_market_open_today() is True
+
+
+def test_is_market_open_today_false_pre_market_on_trading_day():
+    """
+    Before the fix: is_open=False but next_open.date()==today returned True.
+    After the fix: only clock.is_open matters — returns False pre-market.
+    """
+    from datetime import datetime as dt
+    from datetime import timezone
+
+    client = _make_client()
+    clock = MagicMock()
+    clock.is_open = False
+    clock.next_open = MagicMock()
+    clock.next_open.date.return_value = dt.now(timezone.utc).date()
+    client._client.get_clock.return_value = clock
+    assert client.is_market_open_today() is False, "Pre-market on a trading day must return False"

@@ -87,8 +87,6 @@ class TelegramClient:
         prime_updates = prime.json().get("result", [])
         if prime_updates:
             self._next_offset = max(u["update_id"] for u in prime_updates) + 1
-        else:
-            self._next_offset = 0
         start = time.monotonic()
 
         while True:

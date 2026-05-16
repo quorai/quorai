@@ -82,3 +82,33 @@ class TestSentimentAnalystAgent:
         reasoning = result["data"]["analyst_signals"]["sentiment_analyst_agent"]["AAPL"]["reasoning"]
         assert "news_sentiment" not in reasoning
         assert "insider_trading" in reasoning
+
+    def test_zero_share_trades_not_counted_as_bullish(self):
+        """
+        R49: transaction_shares=0 is not a buy — must not inflate bullish_count.
+        Before the fix: `>= 0` included 0-share rows as bullish.
+        After the fix: `> 0` correctly treats 0 shares as neither bullish nor bearish.
+        """
+        trades = [_trade("AAPL", 0), _trade("AAPL", 0), _trade("AAPL", -100)]
+        with (
+            patch("src.agents.sentiment.get_insider_trades", return_value=trades),
+            patch("src.agents.sentiment.progress"),
+        ):
+            result = sentiment_analyst_agent(_state())
+
+        signals = result["data"]["analyst_signals"]["sentiment_analyst_agent"]["AAPL"]
+        metrics = signals["reasoning"]["insider_trading"]["metrics"]
+        assert metrics["bullish_trades"] == 0, f"Zero-share rows must not count as bullish, got {metrics['bullish_trades']}"
+        assert signals["signal"] == "bearish", f"1 sell vs 0 real buys → bearish. Got: {signals['signal']}"
+
+    def test_zero_share_trades_mixed_still_neutral_without_real_buys(self):
+        """Only zero-share rows (no real buys or sells) → neutral with 0 confidence."""
+        trades = [_trade("AAPL", 0), _trade("AAPL", 0)]
+        with (
+            patch("src.agents.sentiment.get_insider_trades", return_value=trades),
+            patch("src.agents.sentiment.progress"),
+        ):
+            result = sentiment_analyst_agent(_state())
+
+        signals = result["data"]["analyst_signals"]["sentiment_analyst_agent"]["AAPL"]
+        assert signals["signal"] == "neutral"

@@ -96,3 +96,24 @@ def test_rejection_conditions(tmp_path, condition, kwargs, expected_reason):
     allowed, reason = _check(gate)
     assert allowed is False
     assert reason == expected_reason
+
+
+def test_daily_loss_limit_exact_boundary(tmp_path):
+    """
+    R48: Drawdown of exactly DAILY_LOSS_LIMIT_PCT must trip the gate.
+    Before the fix: `<` let the exact boundary pass through.
+    After the fix: `<=` rejects at the limit.
+    """
+    gate = _make_gate(tmp_path, DAILY_LOSS_LIMIT_PCT=0.03)
+    # account_equity / sod_equity - 1 == -0.03 exactly
+    allowed, reason = _check(gate, account_equity=97_000.0, sod_equity=100_000.0)
+    assert allowed is False, "Exact daily loss limit must trigger rejection"
+    assert reason == "daily_loss_limit"
+
+
+def test_daily_loss_limit_just_below_boundary(tmp_path):
+    """Drawdown just short of the limit is still permitted."""
+    gate = _make_gate(tmp_path, DAILY_LOSS_LIMIT_PCT=0.03)
+    # -2.99% drawdown — just under the 3% limit
+    allowed, reason = _check(gate, account_equity=97_010.0, sod_equity=100_000.0)
+    assert allowed is True, f"Drawdown below limit must be allowed, got: {reason}"

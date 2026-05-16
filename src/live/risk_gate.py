@@ -45,6 +45,6 @@ class RiskGate:
             return "notional_exceeded"
         if qty > s.MAX_ORDER_QTY:
             return "qty_exceeded"
-        if sod_equity > 0 and (account_equity / sod_equity - 1) < -s.DAILY_LOSS_LIMIT_PCT:
+        if sod_equity > 0 and (account_equity / sod_equity - 1) <= -s.DAILY_LOSS_LIMIT_PCT:
             return "daily_loss_limit"
         return ""

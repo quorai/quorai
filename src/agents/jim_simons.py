@@ -238,7 +238,7 @@ def compute_hurst_regime(prices_df) -> dict:
     try:
         hurst = calculate_hurst_exponent(prices_df["close"])
     except Exception:
-        return {"score": 2, "max_score": max_score, "details": "Hurst calculation error — neutral"}
+        return {"score": 0, "max_score": max_score, "details": "Hurst calculation error — no signal"}
 
     score = 0
     details = []
