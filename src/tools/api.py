@@ -340,8 +340,27 @@ def get_financial_metrics(
         m = _build_financial_metrics(ticker, bundle.income, bundle.balance, freq)
         metrics.append(m)
 
-    # Compute EPS growth across consecutive periods
+    # Compute growth rates from consecutive statement periods.
+    # bundles[i] is more recent, bundles[i+1] is older — same index as metrics before filtering.
     for i in range(len(metrics) - 1):
+        curr_b = bundles[i]
+        prev_b = bundles[i + 1]
+
+        curr_rev = curr_b.income.get("revenue")
+        prev_rev = prev_b.income.get("revenue")
+        if curr_rev is not None and prev_rev:
+            metrics[i].revenue_growth = (curr_rev - prev_rev) / abs(prev_rev)
+
+        curr_ni = curr_b.income.get("net_income_loss_attributable_common_shareholders")
+        prev_ni = prev_b.income.get("net_income_loss_attributable_common_shareholders")
+        if curr_ni is not None and prev_ni:
+            metrics[i].earnings_growth = (curr_ni - prev_ni) / abs(prev_ni)
+
+        curr_bv = curr_b.balance.get("total_equity_attributable_to_parent")
+        prev_bv = prev_b.balance.get("total_equity_attributable_to_parent")
+        if curr_bv is not None and prev_bv:
+            metrics[i].book_value_growth = (curr_bv - prev_bv) / abs(prev_bv)
+
         curr = metrics[i]
         prev = metrics[i + 1]
         if curr.earnings_per_share is not None and prev.earnings_per_share:

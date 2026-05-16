@@ -177,6 +177,13 @@ class LiveRunner:
             for ticker, order_id in executor.submitted_orders.items():
                 info = fills.get(order_id)
                 if info:
+                    if info["status"] == "timeout":
+                        logger.warning(
+                            "[runner] %s order %s timed out — manual review required (last_filled_qty=%.3f)",
+                            ticker,
+                            order_id,
+                            info["filled_qty"],
+                        )
                     results[ticker] = f"{info['status']} (filled={info['filled_qty']:.3f})"
         return results
 

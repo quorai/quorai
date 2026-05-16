@@ -45,6 +45,8 @@ class Reconciler:
         results: dict[str, dict] = {}
         pending = list(order_ids)
         deadline = time.monotonic() + timeout_seconds
+        # Track last-observed state so timeout branch can report real partial-fill values.
+        last_observed: dict[str, dict] = {}
 
         while pending and time.monotonic() < deadline:
             still_pending: list[str] = []
@@ -61,6 +63,12 @@ class Reconciler:
                 raw_price = order.filled_avg_price
                 filled_avg_price = float(raw_price) if raw_price not in (None, "", "0") else None
                 ticker = order.symbol or ""
+
+                last_observed[order_id] = {
+                    "filled_qty": filled_qty,
+                    "filled_avg_price": filled_avg_price,
+                    "ticker": ticker,
+                }
 
                 if fill_status in _TERMINAL_STATUSES:
                     logger.info(
@@ -95,18 +103,27 @@ class Reconciler:
             if time.monotonic() < deadline:
                 time.sleep(poll_interval_seconds)
 
-        # Any orders still pending after the deadline are recorded as "timeout"
+        # Any orders still pending after the deadline are recorded as "timeout".
+        # Use the last-observed poll values so partial fills aren't silently zeroed out.
         for order_id in pending:
-            logger.warning("[reconciler] %s timed out waiting for terminal status", order_id)
-            info = {"status": "timeout", "filled_qty": 0.0, "filled_avg_price": None, "ticker": ""}
+            obs = last_observed.get(order_id, {})
+            t_qty = obs.get("filled_qty", 0.0)
+            t_price = obs.get("filled_avg_price")
+            t_ticker = obs.get("ticker", "")
+            logger.warning(
+                "[reconciler] %s timed out waiting for terminal status (last_filled_qty=%.4f)",
+                order_id,
+                t_qty,
+            )
+            info = {"status": "timeout", "filled_qty": t_qty, "filled_avg_price": t_price, "ticker": t_ticker}
             results[order_id] = info
             if self._journal:
                 self._journal.record_reconciliation(
                     order_id=order_id,
-                    ticker="",
+                    ticker=t_ticker,
                     status="timeout",
-                    filled_qty=0.0,
-                    filled_avg_price=None,
+                    filled_qty=t_qty,
+                    filled_avg_price=t_price,
                 )
 
         return results

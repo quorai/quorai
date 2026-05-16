@@ -106,6 +106,11 @@ def compute_allowed_actions(
     margin_used = float(portfolio.get("margin_used", 0.0))
     equity = float(portfolio.get("equity", cash))
 
+    # Running totals prevent double-spending across tickers in the same cycle.
+    # remaining_short_capacity is in notional dollars (matches (equity/margin_req) capacity formula).
+    remaining_cash = cash
+    remaining_short_capacity = max(0.0, (equity / margin_requirement) - margin_used) if margin_requirement > 0 else 0.0
+
     for ticker in tickers:
         price = float(current_prices.get(ticker, 0.0))
         pos = positions.get(
@@ -122,11 +127,12 @@ def compute_allowed_actions(
         # Long side
         if long_shares > 0:
             actions["sell"] = long_shares
-        if cash > 0 and price > 0:
-            max_buy_cash = cash / price
+        if remaining_cash > 0 and price > 0:
+            max_buy_cash = remaining_cash / price
             max_buy = max(0, min(max_qty, max_buy_cash))
             if max_buy > 0:
                 actions["buy"] = max_buy
+                remaining_cash -= max_buy * price  # reserve so later tickers see the residual
 
         # Short side
         if short_shares > 0:
@@ -136,11 +142,11 @@ def compute_allowed_actions(
                 # If margin requirement is zero or unset, only cap by max_qty
                 max_short = max_qty
             else:
-                available_margin = max(0.0, (equity / margin_requirement) - margin_used)
-                max_short_margin = available_margin / price
+                max_short_margin = remaining_short_capacity / price
                 max_short = max(0, min(max_qty, max_short_margin))
             if max_short > 0:
                 actions["short"] = max_short
+                remaining_short_capacity -= max_short * price  # consume notional capacity
 
         # Hold always valid
         actions["hold"] = 0

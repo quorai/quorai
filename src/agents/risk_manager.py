@@ -85,7 +85,8 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
     # Determine which tickers currently have exposure (non-zero absolute position)
     active_positions = {t for t, pos in portfolio.get("positions", {}).items() if abs(pos.get("long", 0) - pos.get("short", 0)) > 0}
 
-    # Calculate total portfolio value based on current market prices (Net Liquidation Value)
+    # Calculate total portfolio value based on current market prices (Net Liquidation Value).
+    # Fall back to portfolio "equity" if price-based computation yields 0 (positions not priced).
     total_portfolio_value = portfolio.get("cash", 0.0)
 
     for ticker, position in portfolio.get("positions", {}).items():
@@ -94,6 +95,9 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
             total_portfolio_value += position.get("long", 0) * current_prices[ticker]
             # Subtract market value of short positions
             total_portfolio_value -= position.get("short", 0) * current_prices[ticker]
+
+    if total_portfolio_value <= 0:
+        total_portfolio_value = float(portfolio.get("equity", total_portfolio_value))
 
     progress.update_status(agent_id, None, f"Total portfolio value: {total_portfolio_value:.2f}")
 
@@ -153,11 +157,21 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
         # Calculate remaining limit for this position
         remaining_position_limit = position_limit - current_position_value
 
-        # Ensure we don't exceed available cash
-        max_position_size = min(remaining_position_limit, portfolio.get("cash", 0))
+        # Longs are cash-constrained; shorts are margin-constrained.
+        cash = float(portfolio.get("cash", 0.0))
+        margin_req = float(portfolio.get("margin_requirement", 0.5))
+        margin_used_val = float(portfolio.get("margin_used", 0.0))
+        # Use portfolio equity (NAV) as the base for margin capacity; fall back to
+        # total_portfolio_value computed above if "equity" is absent.
+        equity_for_margin = float(portfolio.get("equity", total_portfolio_value))
+        available_margin = max(0.0, (equity_for_margin / margin_req) - margin_used_val) if margin_req > 0 else 0.0
+
+        max_long_size = min(max(0.0, remaining_position_limit), cash)
+        max_short_size = min(max(0.0, remaining_position_limit), available_margin)
 
         risk_analysis[ticker] = {
-            "remaining_position_limit": float(max_position_size),
+            "remaining_position_limit": float(max_long_size),
+            "max_short_position_size": float(max_short_size),
             "current_price": float(current_price),
             "volatility_metrics": {"daily_volatility": float(vol_data.get("daily_volatility", 0.05)), "annualized_volatility": float(vol_data.get("annualized_volatility", 0.25)), "volatility_percentile": float(vol_data.get("volatility_percentile", 100)), "data_points": int(vol_data.get("data_points", 0))},
             "correlation_metrics": corr_metrics,
@@ -169,12 +183,13 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
                 "combined_position_limit_pct": float(combined_limit_pct),
                 "position_limit": float(position_limit),
                 "remaining_limit": float(remaining_position_limit),
-                "available_cash": float(portfolio.get("cash", 0)),
+                "available_cash": float(cash),
+                "available_short_capacity": float(available_margin),
                 "risk_adjustment": f"Volatility x Correlation adjusted: {combined_limit_pct:.1%} (base {vol_adjusted_limit_pct:.1%})",
             },
         }
 
-        progress.update_status(agent_id, ticker, f"Adj. limit: {combined_limit_pct:.1%}, Available: ${max_position_size:.0f}")
+        progress.update_status(agent_id, ticker, f"Adj. limit: {combined_limit_pct:.1%}, Long: ${max_long_size:.0f}, Short: ${max_short_size:.0f}")
 
     progress.update_status(agent_id, None, "Done")
 
