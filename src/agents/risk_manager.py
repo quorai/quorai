@@ -120,7 +120,9 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
         current_position_value = abs(long_value - short_value)  # Use absolute exposure
 
         # Volatility-adjusted limit pct
-        vol_adjusted_limit_pct = calculate_volatility_adjusted_limit(vol_data.get("annualized_volatility", 0.25))
+        _risk_profile = state["metadata"].get("risk_profile")
+        _base_limit_kwargs = {"base_limit": _risk_profile.base_limit} if _risk_profile is not None else {}
+        vol_adjusted_limit_pct = calculate_volatility_adjusted_limit(vol_data.get("annualized_volatility", 0.25), **_base_limit_kwargs)
 
         # Correlation adjustment
         corr_metrics = {
@@ -243,7 +245,7 @@ def calculate_volatility_metrics(prices_df: pd.DataFrame, lookback_days: int = 6
     return {"daily_volatility": float(daily_vol) if not np.isnan(daily_vol) else 0.025, "annualized_volatility": float(annualized_vol) if not np.isnan(annualized_vol) else 0.25, "volatility_percentile": float(current_vol_percentile) if not np.isnan(current_vol_percentile) else 50.0, "data_points": len(recent_returns)}
 
 
-def calculate_volatility_adjusted_limit(annualized_volatility: float) -> float:
+def calculate_volatility_adjusted_limit(annualized_volatility: float, base_limit: float = 0.20) -> float:
     """
     Calculate position limit as percentage of portfolio based on volatility.
 
@@ -253,7 +255,6 @@ def calculate_volatility_adjusted_limit(annualized_volatility: float) -> float:
     - High volatility (>30%): 10-15% allocation
     - Very high volatility (>50%): Max 10% allocation
     """
-    base_limit = 0.20  # 20% baseline
 
     if annualized_volatility < 0.15:  # Low volatility
         # Allow higher allocation for stable stocks

@@ -91,3 +91,21 @@ def test_sod_equity_loaded_if_already_saved(mock_pipeline_cls, mock_to_snapshot)
 
     mock_save.assert_not_called()
     assert runner._sod_equity == 100_000.0
+
+
+@patch("src.live.runner.to_snapshot")
+@patch("src.live.runner.PipelineContext")
+def test_dry_run_skips_sod_equity_save(mock_pipeline_cls, mock_to_snapshot):
+    # dry_run=True must not call save_sod_equity so weekend/off-hours dry runs work
+    # without requiring a manually-created sod-equity file.
+    broker = _make_broker(equity=75_000.0)
+    mock_to_snapshot.return_value = _make_snapshot()
+    mock_pipeline_cls.build.return_value = _make_ctx(decisions={})
+
+    runner = _make_runner(broker, dry_run=True)
+
+    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save:
+        runner.prepare()
+
+    mock_save.assert_not_called()
+    assert runner._sod_equity == 75_000.0

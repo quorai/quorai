@@ -16,6 +16,7 @@ from src.cli.input import (
 )
 from src.graph.state import AgentState
 from src.llm.request import RunRequest
+from src.risk_profiles import RiskProfile
 from src.utils.analysts import ANALYST_CONFIG, get_analyst_nodes
 from src.utils.display import print_trading_output
 from src.utils.progress import progress
@@ -56,6 +57,7 @@ def run_quorai(
     llm_temperature: float | None = None,
     conviction_weights: dict[str, float] | None = None,
     request: RunRequest | None = None,
+    risk_profile: RiskProfile | None = None,
 ):
     if selected_analysts is None:
         selected_analysts = []
@@ -92,6 +94,7 @@ def run_quorai(
                     "conviction_weights": conviction_weights or {},
                     "request": request,
                     "selected_analysts": effective_analysts,
+                    "risk_profile": risk_profile,
                 },
             },
         )

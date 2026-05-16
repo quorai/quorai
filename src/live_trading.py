@@ -54,6 +54,9 @@ def _parse_args() -> argparse.Namespace:
             "Also reads QUORAI_AGENT_MODELS_JSON env var (JSON dict)."
         ),
     )
+    from src.cli.input import add_risk_profile_arg
+
+    add_risk_profile_arg(parser)
     parser.add_argument("--force", action="store_true", help="Skip market-open check (useful for development/testing)")
     parser.add_argument("--confirm", action="store_true", help="Auto-confirm without interactive prompt")
     parser.add_argument(
@@ -95,8 +98,16 @@ def main() -> None:
     from src.live.audit_journal import AuditJournal
     from src.live.risk_gate import RiskGate
     from src.live.runner import LiveRunner
+    from src.risk_profiles import get_profile
 
-    settings = get_settings()
+    profile = get_profile(args.risk_profile)
+    settings = get_settings().model_copy(update={
+        "MAX_ORDER_NOTIONAL": profile.max_order_notional,
+        "MAX_ORDER_QTY": profile.max_order_qty,
+        "DAILY_LOSS_LIMIT_PCT": profile.daily_loss_limit_pct,
+    })
+    log = logging.getLogger(__name__)
+    log.info("Risk profile: %s (base_limit=%.2f, notional_cap=$%.0f)", profile.name, profile.base_limit, profile.max_order_notional)
     broker = AlpacaClient()
     journal = AuditJournal()
     risk_gate = RiskGate(settings=settings, journal=journal)
@@ -143,6 +154,7 @@ def main() -> None:
         risk_gate=risk_gate,
         idempotency_guard=idempotency_guard,
         request=run_request,
+        risk_profile=profile,
     )
 
     # Pre-flight: skip on non-trading days
@@ -156,7 +168,6 @@ def main() -> None:
     # Pre-flight: check Telegram command inbox
     from src.notifications.command_store import CommandStore, parse_directive
 
-    log = logging.getLogger(__name__)
     command_store = CommandStore()
 
     if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:

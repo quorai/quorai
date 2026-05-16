@@ -9,17 +9,15 @@ agents) each produce a bullish/bearish/neutral signal per ticker. Those signals 
 debate node, then a risk manager, then a portfolio manager that emits final trading decisions.
 No real trades are executed.
 
-The repo has three layers:
+The repo has one active layer plus two planned future layers:
 
 - **`src/` — core library / CLI.** The agent graph, all analyst agents, data fetching (yfinance + Finnhub),
-  disk-persisted caching, multi-provider LLM dispatch, and the backtesting engine. This code is
-  also reused as a library by the web backend.
-- **`app/` — web application.** A FastAPI backend and a React + ReactFlow frontend. The backend
-  builds a LangGraph `StateGraph` from the canvas the user draws and streams execution progress
-  to the browser over Server-Sent Events (SSE).
-- **`v2/` — research module (mostly stubs).** A planned ground-up quant rebuild. Nearly all
-  modules are docstring scaffolding; the only runnable code is `v2/signals/trivial.py` (a
-  zero-signal placeholder) and the supporting `BaseSignal` ABC + registry.
+  disk-persisted caching, multi-provider LLM dispatch, and the backtesting engine.
+- **`app/` — web application *(not currently in the tree)*.** A planned FastAPI backend and React + ReactFlow
+  frontend. The backend would build a LangGraph `StateGraph` from a visual canvas and stream execution
+  progress to the browser over Server-Sent Events (SSE).
+- **`v2/` — research module *(not currently in the tree)*.** A planned ground-up quant rebuild focused on
+  methodology over personality. The design is documented below for reference.
 
 ## Details
 
@@ -132,7 +130,8 @@ per-agent conviction weights loaded from `src/feedback/weights.json` (when
 written to `state["data"]["analyst_signals"]` and forwarded to the risk manager.
 
 **Risk manager** (`src/agents/risk_manager.py`): pure maths — computes volatility- and
-correlation-adjusted position limits. No LLM call.
+correlation-adjusted position limits. No LLM call. The per-ticker `base_limit` (default 20% of NAV)
+scales with the active `--risk-profile` preset, read from `state["metadata"]["risk_profile"]`.
 
 **Portfolio manager** (`src/agents/portfolio_manager.py`): aggregates debate group signals, reads
 risk limits, calls the LLM to produce `{action, quantity, confidence, reasoning}` decisions.
@@ -318,6 +317,8 @@ The `compare` subcommand (`python -m src.backtesting compare`) accepts two prese
 
 ### Web backend (`app/backend`)
 
+> **Not currently in the tree.** The `app/` directory is a planned feature. The design below is documented for reference.
+
 **Framework**: FastAPI, launched on `:8000`.
 
 **Key routes** (`app/backend/routes/`):
@@ -345,6 +346,8 @@ Progress is delivered from `src/` to the SSE route via a pub/sub bus in `src/uti
 
 ### Frontend (`app/frontend`)
 
+> **Not currently in the tree.** See [Web backend](#web-backend-appbackend) note above.
+
 **Stack**: React 18 + Vite 5 + TypeScript + `@xyflow/react` (ReactFlow v12) + Tailwind + Radix UI.
 
 The canvas (`app/frontend/src/components/Flow.tsx`) lets the user drag analyst nodes and connect
@@ -358,6 +361,8 @@ Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
 ---
 
 ### Persistence
+
+> **Partial.** The disk cache (`src/data/cache.py`) is active. The SQLite/SQLAlchemy layer belongs to `app/backend`, which is not currently in the tree.
 
 - **Database**: SQLite (`app/backend/quorai.db`), SQLAlchemy + Alembic migrations under
   `app/backend/alembic/versions/`.
@@ -418,6 +423,7 @@ The live signal log feeds the same `feedback/labeler.py → scorer.py → weight
 | `src/live/sod_equity.py` | Persists start-of-day equity for daily loss calculation |
 | `src/live_trading.py` | CLI entry point — `uv run python src/live_trading.py` |
 | `src/config.py` | `Settings` (pydantic-settings) — centralised env-var config |
+| `src/risk_profiles.py` | Five named risk presets (`conservative` → `speculative`) + `get_profile()` lookup |
 
 `LiveRunner` CLI flags for the new subsystems:
 
@@ -426,12 +432,15 @@ The live signal log feeds the same `feedback/labeler.py → scorer.py → weight
 | `--use-regime-selection` | off | Narrow analysts to regime-appropriate groups via SPY classification |
 | `--use-conviction-weights` | off | Apply per-agent weights from `src/feedback/weights.json` |
 | `--no-signal-log` | (log on) | Suppress writing `logs/signals-live-YYYY-MM-DD.jsonl` |
+| `--risk-profile` | `balanced` | Risk preset — sets position-sizing `base_limit` and `RiskGate` caps. Options: `conservative`, `cautious`, `balanced`, `aggressive`, `speculative`. Defined in `src/risk_profiles.py`. |
 
 > **Docker**: Docker support (`docker/docker-compose.yml`) is planned but not yet present in this repository.
 
 ---
 
 ### v2 research module
+
+> **Not currently in the tree.** `v2/` is a planned ground-up quant rebuild; the design is documented here for reference.
 
 `v2/` is an aspirational ground-up quant rebuild ("methodology over personality"). It is
 **≈95% empty scaffolding**. Planned modules (`data`, `event_study`, `features`, `validation`,

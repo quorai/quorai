@@ -34,4 +34,4 @@ uv run mypy src/broker src/live src/data src/backtesting src/config.py
 
 ## Reporting issues
 
-Use the [GitHub issue tracker](../../issues). For security vulnerabilities, see [SECURITY.md](SECURITY.md) instead.
+Use the [GitHub issue tracker](../../issues). For security vulnerabilities, open an issue and mark it as a security report.

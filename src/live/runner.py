@@ -16,6 +16,7 @@ from src.live.risk_gate import RiskGate
 from src.live.sod_equity import load_sod_equity, save_sod_equity
 from src.llm.request import RunRequest
 from src.orchestration.preflight import PipelineContext
+from src.risk_profiles import RiskProfile
 
 if TYPE_CHECKING:
     from src.live.idempotency_guard import IdempotencyGuard
@@ -43,6 +44,7 @@ class LiveRunner:
         risk_gate: RiskGate | None = None,
         idempotency_guard: IdempotencyGuard | None = None,
         request: RunRequest | None = None,
+        risk_profile: RiskProfile | None = None,
     ) -> None:
         self.tickers = tickers
         self.model_name = model_name
@@ -60,6 +62,7 @@ class LiveRunner:
         self._risk_gate = risk_gate
         self._idempotency_guard = idempotency_guard
         self._request = request
+        self._risk_profile = risk_profile
         self._sod_equity: float = 0.0
         self._signal_log_path: str | None = None
         self._token_summary_data: dict = {}
@@ -94,11 +97,12 @@ class LiveRunner:
             if _pos.get("long", 0) or _pos.get("short", 0):
                 logger.info("Position synced: %s long=%.0f short=%.0f", _tkr, _pos.get("long", 0), _pos.get("short", 0))
 
-        # 2. Capture SOD equity (first call today saves it)
+        # 2. Capture SOD equity (first call today saves it; dry-run never writes the file)
         account_equity = float(account.equity or "0")
         sod = load_sod_equity()
         if sod is None:
-            save_sod_equity(account_equity)
+            if not self.dry_run:
+                save_sod_equity(account_equity)
             sod = account_equity
         self._sod_equity = sod
 
@@ -143,6 +147,7 @@ class LiveRunner:
             use_conviction_weights=self._use_conviction_weights,
             enable_signal_log=self._enable_signal_log,
             request=self._request,
+            risk_profile=self._risk_profile,
         ) as ctx:
             self._signal_log_path = ctx.signal_log_path
             output = ctx.run_cycle(

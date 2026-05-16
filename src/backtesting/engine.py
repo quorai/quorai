@@ -11,6 +11,7 @@ from src.agents._data_bundle import ALL_LINE_ITEMS
 from src.data.backtest_store import _TickerStore, get_backtest_store
 from src.llm.request import RunRequest
 from src.orchestration.preflight import PipelineContext
+from src.risk_profiles import RiskProfile
 from src.tools._yfinance_fundamentals import get_yfinance_news
 from src.tools.api import (
     get_company_news,
@@ -59,6 +60,7 @@ class BacktestEngine:
         use_regime_selection: bool = False,
         use_conviction_weights: bool = False,
         request: RunRequest | None = None,
+        risk_profile: RiskProfile | None = None,
     ) -> None:
         self._agent = agent
         self._tickers = tickers
@@ -73,6 +75,7 @@ class BacktestEngine:
         self._use_regime_selection = use_regime_selection
         self._use_conviction_weights = use_conviction_weights
         self._request = request
+        self._risk_profile = risk_profile
 
         self._portfolio = Portfolio(
             tickers=tickers,
@@ -163,6 +166,9 @@ class BacktestEngine:
         return self._signal_log_path
 
     def run_backtest(self) -> PerformanceMetrics:
+        if self._risk_profile is not None:
+            logger.info("Risk profile: %s (base_limit=%.2f, notional_cap=$%.0f)", self._risk_profile.name, self._risk_profile.base_limit, self._risk_profile.max_order_notional)
+
         self._prefetch_data()
 
         run_id = f"{'-'.join(self._tickers)}-{self._start_date}-{self._end_date}"
@@ -186,6 +192,7 @@ class BacktestEngine:
                 use_regime_selection=self._use_regime_selection,
                 use_conviction_weights=self._use_conviction_weights,
                 request=self._request,
+                risk_profile=self._risk_profile,
             ) as ctx:
                 self._signal_log_path = ctx.signal_log_path
 

@@ -11,8 +11,41 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-green)](https://github.com/langchain-ai/langgraph)
+[![CI](https://github.com/quorai/quorai/actions/workflows/ci.yml/badge.svg)](https://github.com/quorai/quorai/actions/workflows/ci.yml)
 
 A multi-agent AI trading system where specialized LLM analyst agents deliberate and vote on trading decisions through a portfolio manager. Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](https://github.com/langchain-ai/langchain). For **educational purposes only** — not intended for real trading or investment.
+
+## Quickstart
+
+```bash
+uv sync
+cp .env.example .env   # add OPENROUTER_API_KEY and FINNHUB_API_KEY
+uv run backtester --tickers AAPL,MSFT --model deepseek/deepseek-chat --model-provider OpenRouter
+```
+
+The `backtester` console script is installed by `uv sync`. For all options see [Usage — Backtesting](#backtesting).
+
+## Contents
+
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Analyst roster](#analyst-roster)
+- [Architecture](#architecture)
+- [Setup](#setup)
+- [Usage](#usage)
+  - [Backtesting](#backtesting)
+  - [Live / Paper Trading](#live--paper-trading)
+  - [Telegram approval gate](#telegram-approval-gate)
+- [Safety mechanisms](#safety-mechanisms)
+- [Project structure](#project-structure)
+- [Running tests](#running-tests)
+- [Adding an analyst](#adding-an-analyst)
+- [Troubleshooting](#troubleshooting)
+- [Python version](#python-version)
+- [Changelog](#changelog)
+- [Disclaimer](#disclaimer)
+- [Acknowledgements](#acknowledgements)
+- [License](#license)
 
 ## Features
 
@@ -38,6 +71,10 @@ Market Data → Analyst Agents → Portfolio Manager → Order Execution
            (LangGraph nodes)   (deliberation graph)
 ```
 
+<p align="center">
+  <img src="assets/flow-diagram.png" alt="Quorai pipeline diagram" width="700"/>
+</p>
+
 Each trading cycle:
 1. Financial data is fetched (price, fundamentals, news, macro indicators)
 2. Each analyst agent runs as a LangGraph node and produces a signal with reasoning
@@ -55,6 +92,20 @@ Each trading cycle:
 | Sentiment | News sentiment, social sentiment |
 | Risk | Risk manager, Taleb (tail-risk) |
 | Special | Bull/bear debate node |
+
+<p align="center">
+  <img src="assets/agents-groups.png" alt="Analyst strategy groups" width="700"/>
+</p>
+
+## Architecture
+
+The pipeline runs as a LangGraph `StateGraph`: `start_node` fans out to all selected analyst nodes in parallel, feeds into a `debate_node` (conviction-weighted group aggregation), then `risk_management_agent` (pure maths, no LLM), then `portfolio_manager` (LLM decision). Regime selection and conviction-weight loading happen in `src/orchestration/preflight.py:PipelineContext` before the graph is invoked each day.
+
+```
+start_node → [analyst_1 … analyst_25] → debate_node → risk_management_agent → portfolio_manager → END
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design — data layer, LLM dispatch, backtesting internals, regime classifier, conviction-weight feedback loop, token telemetry, live trading layer, and per-ticker parallelism.
 
 ## Setup
 
@@ -87,15 +138,15 @@ FINNHUB_API_KEY=...
 
 ### Backtesting
 
-Run from the CLI:
-
 ```bash
-uv run python -m src.backtesting \
+uv run backtester \
     --tickers AAPL,MSFT \
     --model deepseek/deepseek-chat \
     --model-provider OpenRouter \
     --show-reasoning
 ```
+
+You can also invoke the module directly: `uv run python -m src.backtesting`.
 
 Key flags:
 - `--tickers` — comma-separated list of tickers (required)
@@ -108,12 +159,15 @@ Key flags:
 - `--temperature` — LLM temperature override
 - `--use-regime-selection` — classify SPY regime per day and narrow analysts to the relevant group
 - `--use-conviction-weights` — weight agents by rolling directional hit-rate (requires `src/feedback/weights.json` from a prior scored run)
+- `--risk-profile` — choose one of five risk presets: `conservative`, `cautious`, `balanced` (default), `aggressive`, `speculative`. Controls per-ticker position sizing and notional/loss-limit caps together.
 - `--agent-model AGENT=model/PROVIDER` — override model for a specific analyst; repeatable; use `*=model/PROVIDER` to override all agents
 
-To run a side-by-side A/B comparison, add the `compare` subcommand:
+See [backtest.md](backtest.md) for the full flag reference, programmatic API, model catalog, and complete analyst key list.
+
+#### A/B comparison
 
 ```bash
-uv run python -m src.backtesting compare \
+uv run backtester compare \
     --tickers AAPL,MSFT \
     --model deepseek/deepseek-chat \
     --model-provider OpenRouter \
@@ -185,6 +239,7 @@ Key flags:
 - `--analysts` — comma-separated analyst IDs to include (default: all)
 - `--use-regime-selection` — classify today's SPY regime and narrow analysts to the matching strategy groups (same logic as `BacktestEngine`)
 - `--use-conviction-weights` — apply per-agent conviction weights from `src/feedback/weights.json`; warns if the file is absent but does not abort
+- `--risk-profile` — choose one of five risk presets: `conservative`, `cautious`, `balanced` (default), `aggressive`, `speculative`. Controls per-ticker position sizing and RiskGate caps (notional, quantity, daily loss limit) together. See the safety table below for the values per preset.
 - `--no-signal-log` — disable writing `logs/signals-live-YYYY-MM-DD.jsonl` (signal logging is on by default)
 - `--dry-run` — print decisions without submitting orders
 - `--confirm` — skip interactive confirmation prompt
@@ -227,13 +282,56 @@ You can send plain-text messages to the bot at any time. They are read at the st
 
 The bot replies with a confirmation message when a command is recognised. Command state is persisted in `logs/command_state.json` so it survives process restarts and cron jobs.
 
+## Safety mechanisms
+
+The Alpaca client (`src/broker/alpaca_client.py:66-67`) refuses to construct a live-trading client
+unless `ALPACA_PAPER=True`, making this paper-trading software by construction. Within that sandbox,
+multiple caps apply:
+
+| Layer | Source | Default (`balanced`) |
+|---|---|---|
+| Per-ticker volatility cap | `src/agents/risk_manager.py` | 5–25% of NAV (lower for high-vol or correlated names) |
+| Cycle-wide cash guard | `src/agents/portfolio_manager.py:111-149` | Cumulative buys across all tickers cannot exceed available cash |
+| Backtest cash invariant | `src/backtesting/portfolio.py:82-106` | Over-budget buys truncated to `cash / price` |
+| Per-order notional cap | `src/live/risk_gate.py` (`MAX_ORDER_NOTIONAL`) | $10,000 |
+| Per-order quantity cap | `src/live/risk_gate.py` (`MAX_ORDER_QTY`) | 1,000 shares |
+| Daily loss limit | `src/live/risk_gate.py` (`DAILY_LOSS_LIMIT_PCT`) | 5% of start-of-day equity |
+| Kill switch | `src/config.py` (`KILL_SWITCH`) | Off by default; flip to reject all orders immediately |
+| Telegram approval gate (opt-in) | `src/live_trading.py` (`--require-approval`) | Fail-closed: missing creds, Telegram error, reject, or timeout all abort with zero orders submitted |
+| Prior-run idempotency re-prompt | `src/live/idempotency_guard.py:34` (`TelegramPriorRunApprover`) | Re-asks via Telegram if today already has submissions; fail-closed if Telegram unreachable |
+
+The three `RiskGate` caps and the position-sizing `base_limit` are bundled into five presets selectable via `--risk-profile`:
+
+| Profile | `base_limit` | Notional cap | Qty cap | Daily loss limit |
+|---|---|---|---|---|
+| `conservative` | 10% | $5,000 | 500 shares | 2% |
+| `cautious` | 15% | $7,500 | 750 shares | 3% |
+| `balanced` *(default)* | 20% | $10,000 | 1,000 shares | 5% |
+| `aggressive` | 30% | $20,000 | 2,000 shares | 8% |
+| `speculative` | 50% | $50,000 | 5,000 shares | 15% |
+
+Individual caps are still overridable via env vars (see `src/config.py`). The `--risk-profile` flag takes precedence over the env defaults for that run only.
+
+### Known limitations
+
+- **Notional cap is per-order, not per-cycle.** With N tickers, up to `N × $10,000` of orders can be submitted in a single cycle before any cap fires.
+- **No portfolio-level concentration cap.** Four low-vol uncorrelated names can each hit the 25% per-ticker ceiling and effectively go all-in across the basket.
+- **Daily loss limit re-baselines if SOD equity is missing.** If `logs/sod_equity.json` is absent at run-time (e.g. after a crash), `src/live/runner.py:99-103` resets the baseline to current (already drawn-down) equity, defeating the limit for that day.
+- **Sub-$1 fractional buys are silently dropped.** `src/live/executor.py:83` rounds `qty` to 3 decimals; a tiny allocation on a high-priced stock rounds to `0.000` and is classified as `skipped` with no warning.
+- **No `fractionable` pre-check in the Alpaca client.** Fractional `qty` on a non-fractionable asset fails after order submission rather than being caught early (`src/broker/alpaca_client.py:118-128`).
+- **Backtest silent truncation.** Over-budget buys in `src/backtesting/portfolio.py:93-105` partially fill without any log line, which can mask LLM or risk-manager miscalculations in backtest results.
+
+The paper-only hard-stop in `alpaca_client.py` is the base safety net. Running with `--require-approval` adds a human-in-the-loop gate on top of it. The limitations above are documented, not fixed.
+
 ## Project structure
 
 | Path | Purpose |
 |---|---|
-| `src/` | Core library: agents, backtesting engine, LLM dispatch, data fetching, live trading |
+| `src/main.py` | `run_quorai()` — single-run entry point; `create_workflow()` — LangGraph builder |
+| `src/live_trading.py` | Live/paper trading CLI entry point |
 | `src/agents/` | 25 analyst agents (personality + quant) plus risk manager and portfolio manager |
-| `src/backtesting/` | Engine, portfolio, metrics, CLI (`python -m src.backtesting [compare]`), signal log, A/B harness |
+| `src/backtesting/` | Engine, portfolio, metrics, CLI (`backtester` / `python -m src.backtesting [compare]`), signal log, A/B harness |
+| `src/orchestration/` | `PipelineContext` — pre-graph helper shared by live and backtest |
 | `src/regime/` | `MarketRegime` classifier + analyst-selection policy |
 | `src/feedback/` | Forward-return labeler, rolling per-agent scorer, weights loader |
 | `src/broker/` | `Broker` protocol + Alpaca client |
@@ -243,25 +341,57 @@ The bot replies with a confirmation message when a command is recognised. Comman
 | `src/llm/` | Multi-provider LLM dispatch, OpenRouter catalog |
 | `src/utils/` | Analyst registry (`ANALYST_CONFIG`), shared helpers |
 | `src/config.py` | Centralised env-var config via pydantic-settings |
-| `src/orchestration/` | `PipelineContext` — shared pre-graph helper for live and backtest |
 | `tests/` | Unit and integration tests |
 
 ## Running tests
 
 ```bash
-uv run pytest
+uv run python -m pytest
 ```
+
+> Use `python -m pytest`, not `uv run pytest` — the latter invokes a stale venv shebang that resolves to the wrong Python.
 
 ## Adding an analyst
 
 1. Create `src/agents/my_analyst.py` with a `my_analyst_agent(state, agent_id)` function.
 2. Register it in `src/utils/analysts.py` — add an entry to `ANALYST_CONFIG`.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines and [ARCHITECTURE.md](ARCHITECTURE.md) for system design.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines.
+
+## Troubleshooting
+
+**`uv run pytest` fails or runs the wrong Python**  
+Use `uv run python -m pytest` instead.
+
+**`--use-conviction-weights` warns about a missing `weights.json`**  
+Conviction weights are computed from a prior backtest's signal log. Run a backtest first, then label and score the output:
+
+```python
+from src.feedback.labeler import label_signals
+from src.feedback.scorer import compute_weights
+
+labeled = label_signals("logs/signals-<run-id>.jsonl", prices_df)
+compute_weights(labeled)  # writes src/feedback/weights.json
+```
+
+Then re-run with `--use-conviction-weights`.
+
+**Sharpe / Sortino look extreme on a short backtest**  
+Both ratios are annualised from daily returns. A handful of data points isn't statistically meaningful — use a test window of at least several months before drawing conclusions.
+
+**Live trading fails to connect to Alpaca**  
+Ensure `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL` are set in `.env`. For paper trading, `ALPACA_BASE_URL` should be `https://paper-api.alpaca.markets`.
+
+**Telegram approval bot doesn't respond**  
+Ensure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set. Verify the bot is started (`/start`) and you are in the correct chat. The default timeout is 30 minutes — increase `TELEGRAM_APPROVAL_TIMEOUT_SECONDS` if needed.
 
 ## Python version
 
-Python 3.12 recommended; 3.11 supported.
+Python 3.11+ required (`>=3.11` in `pyproject.toml`; `.python-version` pins 3.11). CI runs 3.12.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Disclaimer
 
@@ -278,6 +408,9 @@ The agent modules named after real investors (Buffett, Munger, Ackman, Burry, Wo
 
 - **[virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** — persona-agent architecture, LLM prompt design, and orchestration patterns that Quorai is built upon.
 - **[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)** — the bull/bear debate concept that inspired `src/agents/debate_node.py`.
+- **[Finnhub](https://finnhub.io/)** — insider trades and company news API.
+- **[yfinance](https://github.com/ranaroussi/yfinance)** — prices, financial metrics, and fundamental data.
+- **[Alpaca](https://alpaca.markets/)** — paper and live trading API.
 
 ## License
 

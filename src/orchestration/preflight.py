@@ -11,6 +11,7 @@ from src.backtesting.types import AgentOutput, PortfolioSnapshot
 from src.feedback.loader import load_weights
 from src.llm.request import RunRequest
 from src.regime import classify_regime, select_analysts_for_regime
+from src.risk_profiles import RiskProfile
 
 if TYPE_CHECKING:
     from src.backtesting.portfolio import Portfolio
@@ -54,6 +55,7 @@ class PipelineContext:
         conviction_weights: dict[str, float],
         signal_logger: SignalLogger | None,
         request: RunRequest | None,
+        risk_profile: RiskProfile | None = None,
     ) -> None:
         self._agent = agent
         self._tickers = tickers
@@ -66,6 +68,7 @@ class PipelineContext:
         self._conviction_weights = conviction_weights
         self._signal_logger = signal_logger
         self._request = request
+        self._risk_profile = risk_profile
         self._controller = AgentController()
         self._token_usage: list[dict] = []
 
@@ -85,6 +88,7 @@ class PipelineContext:
         use_conviction_weights: bool = False,
         enable_signal_log: bool = True,
         request: RunRequest | None = None,
+        risk_profile: RiskProfile | None = None,
     ) -> PipelineContext:
         """Create a PipelineContext, loading weights and opening the signal logger."""
         conviction_weights: dict[str, float] = {}
@@ -109,6 +113,7 @@ class PipelineContext:
             conviction_weights=conviction_weights,
             signal_logger=signal_logger,
             request=request,
+            risk_profile=risk_profile,
         )
 
     def run_cycle(
@@ -150,6 +155,7 @@ class PipelineContext:
             show_reasoning=self._show_reasoning,
             conviction_weights=self._conviction_weights,
             request=self._request,
+            risk_profile=self._risk_profile,
         )
 
         if self._signal_logger is not None:

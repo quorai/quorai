@@ -186,6 +186,18 @@ class CLIInputs:
     raw_args: Optional[argparse.Namespace] = None
 
 
+def add_risk_profile_arg(parser: argparse.ArgumentParser) -> None:
+    from src.risk_profiles import DEFAULT_PROFILE, RISK_PROFILES
+
+    parser.add_argument(
+        "--risk-profile",
+        dest="risk_profile",
+        choices=sorted(RISK_PROFILES),
+        default=DEFAULT_PROFILE,
+        help=f"Risk preset (default: {DEFAULT_PROFILE}). Controls position sizing base_limit and RiskGate caps.",
+    )
+
+
 def parse_cli_inputs(
     *,
     description: str,

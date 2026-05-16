@@ -4,6 +4,7 @@ import logging
 from typing import Any, Callable, Dict, Sequence, cast
 
 from src.llm.request import RunRequest
+from src.risk_profiles import RiskProfile
 from src.utils.llm import get_token_log, reset_token_log
 
 from .portfolio import Portfolio
@@ -30,6 +31,7 @@ class AgentController:
         show_reasoning: bool = False,
         conviction_weights: dict[str, float] | None = None,
         request: RunRequest | None = None,
+        risk_profile: RiskProfile | None = None,
     ) -> AgentOutput:
         # Ensure we pass a plain snapshot dict to preserve legacy expectations
         if isinstance(portfolio, Portfolio):
@@ -50,6 +52,7 @@ class AgentController:
             show_reasoning=show_reasoning,
             conviction_weights=conviction_weights,
             request=request,
+            risk_profile=risk_profile,
         )
 
         # Normalize outputs to avoid None/missing keys

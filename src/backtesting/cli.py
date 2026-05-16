@@ -7,11 +7,12 @@ from zoneinfo import ZoneInfo
 
 from colorama import Fore, Style, init
 
-from src.cli.input import parse_tickers, select_model
+from src.cli.input import add_risk_profile_arg, parse_tickers, select_model
 from src.llm.models import check_provider_api_key
-from src.utils.validation import validate_ticker
 from src.main import run_quorai
+from src.risk_profiles import get_profile
 from src.utils.analysts import ALL_ANALYST_KEYS
+from src.utils.validation import validate_ticker
 
 from .comparison import RunConfig, run_comparison
 from .engine import BacktestEngine
@@ -55,6 +56,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--use-regime-selection", action="store_true", dest="use_regime_selection", help="Narrow analyst set by daily SPY regime")
     parser.add_argument("--use-conviction-weights", action="store_true", dest="use_conviction_weights", help="Weight agents by rolling hit-rate (requires weights.json)")
+    add_risk_profile_arg(parser)
 
 
 def _resolve_dates(args: argparse.Namespace) -> tuple[str, str]:
@@ -99,6 +101,7 @@ def _main_run(argv: list[str]) -> int:
         show_reasoning=args.show_reasoning,
         use_regime_selection=args.use_regime_selection,
         use_conviction_weights=args.use_conviction_weights,
+        risk_profile=get_profile(args.risk_profile),
     )
 
     metrics = engine.run_backtest()
@@ -149,6 +152,7 @@ def _main_compare(argv: list[str]) -> int:
         model_provider=model_provider,
         selected_analysts=_resolve_analysts(args),
         initial_margin_requirement=args.margin_requirement,
+        risk_profile=get_profile(args.risk_profile),
     )
 
     if args.mode in ("regime", "both"):
