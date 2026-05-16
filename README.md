@@ -406,7 +406,7 @@ The agent modules named after real investors (Buffett, Munger, Ackman, Burry, Wo
 
 ## Acknowledgements
 
-- **[virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** — persona-agent architecture, LLM prompt design, and orchestration patterns that Quorai is built upon.
+- **[virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** — inspiration for the initial persona-agent architecture and LLM prompt design.
 - **[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)** — the bull/bear debate concept that inspired `src/agents/debate_node.py`.
 - **[Finnhub](https://finnhub.io/)** — insider trades and company news API.
 - **[yfinance](https://github.com/ranaroussi/yfinance)** — prices, financial metrics, and fundamental data.
