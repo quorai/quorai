@@ -54,6 +54,7 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
                 "outstanding_shares",
                 "net_income",
                 "total_debt",
+                "cash_and_equivalents",
             ],
             metrics_period="ttm",
             metrics_limit=5,
@@ -319,8 +320,16 @@ def calculate_intrinsic_value_dcf(metrics: list, line_items: list, risk_analysis
     # Terminal value uses year-10 projected FCFF, not fcff0
     tv = fcff_prev * (1 + terminal_growth) / (discount - terminal_growth) / (1 + discount) ** years
 
-    equity_value = pv_sum + tv
+    # FCFF DCF → enterprise value; subtract net debt to get equity value
+    total_debt = getattr(line_items[0], "total_debt", None) or 0
+    cash = getattr(line_items[0], "cash_and_equivalents", None) or 0
+    net_debt = total_debt - cash
+    equity_value = pv_sum + tv - net_debt
     intrinsic_per_share = equity_value / shares
+
+    details = ["FCFF DCF completed"]
+    if not getattr(line_items[0], "cash_and_equivalents", None):
+        details.append("net debt unavailable — cash assumed 0")
 
     return {
         "intrinsic_value": equity_value,
@@ -331,8 +340,9 @@ def calculate_intrinsic_value_dcf(metrics: list, line_items: list, risk_analysis
             "terminal_growth": terminal_growth,
             "discount_rate": discount,
             "projection_years": years,
+            "net_debt": net_debt,
         },
-        "details": ["FCFF DCF completed"],
+        "details": details,
     }
 
 

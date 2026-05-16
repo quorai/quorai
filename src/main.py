@@ -119,7 +119,7 @@ def parallel_analysts_node(state: AgentState) -> dict:
     """
     selected = state["metadata"].get("selected_analysts") or list(ANALYST_CONFIG.keys())
     analyst_nodes_map = get_analyst_nodes()
-    max_workers = int(os.environ.get("QUORAI_PARALLEL_ANALYSTS", "1"))
+    max_workers = int(os.environ.get("QUORAI_PARALLEL_ANALYSTS", "8"))
 
     funcs = [(key, analyst_nodes_map[key][1]) for key in selected if key in analyst_nodes_map]
 

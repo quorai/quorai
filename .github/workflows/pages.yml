@@ -1,21 +1,16 @@
-name: Deploy GitHub Pages
+name: Deploy site to quorai.github.io
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
-  group: pages
+  group: pages-deploy
   cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,18 +31,17 @@ jobs:
       - name: Build site
         run: uv run python scripts/build_site.py
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
+      - name: Add .nojekyll
+        run: touch docs/.nojekyll
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Deploy to quorai.github.io
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          external_repository: quorai/quorai.github.io
+          publish_branch: main
+          publish_dir: ./docs
+          force_orphan: true
+          user_name: quorai-bot
+          user_email: actions@github.com
+          commit_message: "deploy: ${{ github.sha }}"

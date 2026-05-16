@@ -44,6 +44,7 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
                 "operating_income",
                 "ebit",
                 "ebitda",
+                "shareholders_equity",
             ],
             line_item_period="ttm",
             line_item_limit=8,
@@ -104,6 +105,7 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             net_income=li_curr.net_income,
             price_to_book_ratio=most_recent_metrics.price_to_book_ratio,
             book_value_growth=most_recent_metrics.book_value_growth or 0.03,
+            shareholders_equity=getattr(li_curr, "shareholders_equity", None),
         )
 
         market_cap = bundle.market_cap
@@ -255,12 +257,19 @@ def calculate_residual_income_value(
     cost_of_equity: float = 0.10,
     terminal_growth_rate: float = 0.03,
     num_years: int = 5,
+    shareholders_equity: float | None = None,
 ):
     """Residual Income Model (Edwards‑Bell‑Ohlson)."""
-    if not (market_cap and net_income and price_to_book_ratio and price_to_book_ratio > 0):
+    if not net_income:
         return 0
 
-    book_val = market_cap / price_to_book_ratio
+    # Prefer balance-sheet equity; fall back to market-cap-derived estimate
+    if shareholders_equity and shareholders_equity > 0:
+        book_val = shareholders_equity
+    elif market_cap and price_to_book_ratio and price_to_book_ratio > 0:
+        book_val = market_cap / price_to_book_ratio
+    else:
+        return 0
     ri0 = net_income - cost_of_equity * book_val
     if ri0 <= 0:
         return 0

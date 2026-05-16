@@ -183,7 +183,8 @@ def compute_autocorrelation(prices_df) -> dict:
         score += 1
         details.append(f"ACF(1)={acf1:.2f} — momentum regime, not stat-arb territory")
     else:
-        score += 2
+        # near-zero ACF = no exploitable structure; lower than momentum (+1) is intentional
+        score += 1
         details.append(f"ACF(1)={acf1:.2f} — near-zero autocorrelation, weak signal")
 
     return {"score": score, "max_score": max_score, "details": "; ".join(details)}

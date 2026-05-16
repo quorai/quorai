@@ -6,7 +6,7 @@ from typing import Callable, TypeVar
 
 T = TypeVar("T")
 
-_DEFAULT_MAX_WORKERS = 1
+_DEFAULT_MAX_WORKERS = 4
 
 
 def parallel_per_ticker(
@@ -20,8 +20,8 @@ def parallel_per_ticker(
     Returns a dict mapping ticker -> fn(ticker). Execution order is not guaranteed
     in parallel mode. Propagates the first exception raised by any worker.
 
-    max_workers defaults to QUORAI_PARALLEL_TICKERS env var (int, default 1).
-    Set to 1 (or leave unset) to preserve today's serial behaviour.
+    max_workers defaults to QUORAI_PARALLEL_TICKERS env var (int, default 4).
+    Set to 1 to force serial execution.
     """
     if max_workers is None:
         max_workers = int(os.environ.get("QUORAI_PARALLEL_TICKERS", str(_DEFAULT_MAX_WORKERS)))

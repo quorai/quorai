@@ -63,3 +63,13 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+def refresh_settings() -> Settings:
+    """Clear the settings cache and reload from environment / .env file.
+
+    Call this before checking KILL_SWITCH or other env-controlled flags to pick
+    up changes made after process startup (e.g. toggling KILL_SWITCH=true in .env).
+    """
+    get_settings.cache_clear()
+    return get_settings()

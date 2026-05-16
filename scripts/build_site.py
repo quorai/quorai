@@ -92,7 +92,7 @@ def build_sitemap() -> None:
     sitemap = f"""<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://nils-fl.github.io/quorai/</loc>
+    <loc>https://quorai.github.io/</loc>
     <lastmod>{today}</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>

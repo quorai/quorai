@@ -6,6 +6,42 @@ from dataclasses import dataclass, field
 import re
 
 from src.data.models import CompanyNews, FinancialMetrics, InsiderTrade, LineItem, Price
+
+# Union of every line_item_names list used across all personality agents.
+# The backtest pre-fetcher uses this to populate the in-memory store once;
+# individual agents still pass their own subset and only read what they need.
+ALL_LINE_ITEMS: list[str] = [
+    "book_value_per_share",
+    "capital_expenditure",
+    "cash_and_equivalents",
+    "current_assets",
+    "current_liabilities",
+    "debt_to_equity",
+    "depreciation_and_amortization",
+    "dividends_and_other_cash_distributions",
+    "earnings_per_share",
+    "ebit",
+    "ebitda",
+    "free_cash_flow",
+    "goodwill_and_intangible_assets",
+    "gross_margin",
+    "gross_profit",
+    "interest_expense",
+    "issuance_or_purchase_of_equity_shares",
+    "net_income",
+    "operating_expense",
+    "operating_income",
+    "operating_margin",
+    "outstanding_shares",
+    "research_and_development",
+    "return_on_invested_capital",
+    "revenue",
+    "shareholders_equity",
+    "total_assets",
+    "total_debt",
+    "total_liabilities",
+    "working_capital",
+]
 from src.tools._yfinance_fundamentals import get_yfinance_news
 from src.tools.api import (
     get_company_news,

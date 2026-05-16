@@ -17,6 +17,8 @@ def _make_metric(fcf=1000.0, revenue=5000.0, pe=20.0):
 def _make_line_item(shares=100.0):
     li = MagicMock()
     li.outstanding_shares = shares
+    li.total_debt = None
+    li.cash_and_equivalents = None
     return li
 
 

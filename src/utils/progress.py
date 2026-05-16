@@ -20,6 +20,12 @@ class AgentProgress:
         self.live = Live(console=console, refresh_per_second=4, redirect_stdout=False, redirect_stderr=False) if _is_tty else None
         self.started = False
         self.update_handlers: List[Callable[[str, Optional[str], str], None]] = []
+        self._header: str = ""
+
+    def set_header(self, header: str) -> None:
+        """Set a sticky header line shown above the agent status table."""
+        self._header = header
+        self._refresh_display()
 
     def register_handler(self, handler: Callable[[str, Optional[str], str], None]):
         """Register a handler to be called when agent status updates."""
@@ -89,6 +95,10 @@ class AgentProgress:
         # repeated columns.clear() calls that don't clear the rows list.
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column(width=100)
+
+        if self._header:
+            header_text = Text(self._header, style=Style(color="cyan", bold=True))
+            table.add_row(header_text)
 
         # Sort agents with Risk Management and Portfolio Management at the bottom
         def sort_key(item):

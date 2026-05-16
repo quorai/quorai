@@ -432,8 +432,11 @@ def calculate_rsi(prices_df: pd.DataFrame, period: int = 14) -> pd.Series:
     loss = (-delta.where(delta < 0, 0)).fillna(0)
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
     rsi = 100 - (100 / (1 + rs))
+    # avg_loss=0, avg_gain>0 → RSI=100 (canonical); both=0 → flat series → 50 (neutral)
+    rsi = rsi.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    rsi = rsi.mask((avg_loss == 0) & (avg_gain == 0), 50.0)
     return rsi
 
 
@@ -530,7 +533,7 @@ def calculate_hurst_exponent(price_series: pd.Series, max_lag: int = 20) -> floa
     """
     lags = range(2, max_lag)
     # Add small epsilon to avoid log(0)
-    tau = [max(1e-8, np.sqrt(np.std(np.subtract(price_series[lag:], price_series[:-lag])))) for lag in lags]
+    tau = [max(1e-8, np.std(np.subtract(price_series[lag:], price_series[:-lag]))) for lag in lags]
 
     # Return the Hurst exponent from linear fit
     try:

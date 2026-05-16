@@ -6,7 +6,7 @@
 
 *A quorum of AI agents deliberating trading decisions. Pronounced "KWOR-eye" (quorum + AI).*
 
-**[GitHub](https://github.com/nils-fl/quorai)** · **[About](https://nils-fl.github.io/quorai/)**
+**[GitHub](https://github.com/quorai/quorai)** · **[About](https://quorai.github.io/)**
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

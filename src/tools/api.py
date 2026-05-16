@@ -260,9 +260,9 @@ def _build_financial_metrics(ticker: str, income: dict, balance: dict, timeframe
     debt_to_assets = (total_debt / total_assets) if (total_assets and total_assets != 0) else None
     current_ratio = (total_current_assets / total_current_liabilities) if (total_current_assets is not None and total_current_liabilities) else None
 
-    # ROIC = net_income / (total_debt + total_equity)
+    # ROIC = net_income / (total_debt + total_equity); positive guard rejects negative equity
     invested_capital = (total_debt + total_equity) if (total_equity is not None) else None
-    roic = (net_income / invested_capital) if (net_income is not None and invested_capital) else None
+    roic = (net_income / invested_capital) if (net_income is not None and invested_capital is not None and invested_capital > 0) else None
 
     return FinancialMetrics(
         ticker=ticker,
@@ -349,22 +349,23 @@ def get_financial_metrics(
         curr_rev = curr_b.income.get("revenue")
         prev_rev = prev_b.income.get("revenue")
         if curr_rev is not None and prev_rev:
-            metrics[i].revenue_growth = (curr_rev - prev_rev) / abs(prev_rev)
+            # cap at ±500 % to prevent near-zero prior-period bases from producing astronomical ratios
+            metrics[i].revenue_growth = max(-5.0, min(5.0, (curr_rev - prev_rev) / abs(prev_rev)))
 
         curr_ni = curr_b.income.get("net_income_loss_attributable_common_shareholders")
         prev_ni = prev_b.income.get("net_income_loss_attributable_common_shareholders")
         if curr_ni is not None and prev_ni:
-            metrics[i].earnings_growth = (curr_ni - prev_ni) / abs(prev_ni)
+            metrics[i].earnings_growth = max(-5.0, min(5.0, (curr_ni - prev_ni) / abs(prev_ni)))
 
         curr_bv = curr_b.balance.get("total_equity_attributable_to_parent")
         prev_bv = prev_b.balance.get("total_equity_attributable_to_parent")
         if curr_bv is not None and prev_bv:
-            metrics[i].book_value_growth = (curr_bv - prev_bv) / abs(prev_bv)
+            metrics[i].book_value_growth = max(-5.0, min(5.0, (curr_bv - prev_bv) / abs(prev_bv)))
 
         curr = metrics[i]
         prev = metrics[i + 1]
         if curr.earnings_per_share is not None and prev.earnings_per_share:
-            curr.earnings_per_share_growth = (curr.earnings_per_share - prev.earnings_per_share) / abs(prev.earnings_per_share)
+            curr.earnings_per_share_growth = max(-5.0, min(5.0, (curr.earnings_per_share - prev.earnings_per_share) / abs(prev.earnings_per_share)))
 
     metrics = [m for m in metrics if _earliest_available(m.report_period, m.period) <= end_date]
     _cache.set_financial_metrics(cache_key, [m.model_dump() for m in metrics])

@@ -1,10 +1,13 @@
-from datetime import date
+from datetime import datetime
 import json
 import logging
 import os
 import threading
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+_NY = ZoneInfo("America/New_York")
 
 
 class AuditJournal:
@@ -14,7 +17,8 @@ class AuditJournal:
         os.makedirs(log_dir, exist_ok=True)
 
     def _log_path(self) -> str:
-        return os.path.join(self._log_dir, f"trades-{date.today()}.jsonl")
+        ny_date = datetime.now(_NY).strftime("%Y-%m-%d")
+        return os.path.join(self._log_dir, f"trades-{ny_date}.jsonl")
 
     def record(
         self,
@@ -45,6 +49,32 @@ class AuditJournal:
             with open(self._log_path(), "a") as f:
                 f.write(json.dumps(entry) + "\n")
         logger.debug("[journal] %s", entry)
+
+    def record_reconciliation(
+        self,
+        *,
+        order_id: str,
+        ticker: str,
+        status: str,
+        filled_qty: float,
+        filled_avg_price: float | None,
+    ) -> None:
+        """Record a fill reconciliation result as a 'reconciled' journal row."""
+        from datetime import datetime, timezone
+
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "order_id": order_id,
+            "ticker": ticker,
+            "status": "reconciled",
+            "fill_status": status,
+            "filled_qty": filled_qty,
+            "filled_avg_price": filled_avg_price,
+        }
+        with self._lock:
+            with open(self._log_path(), "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        logger.debug("[journal] reconciled %s", entry)
 
     def list_submitted_today(self) -> list[dict]:
         """Return today's journal entries with status == 'submitted'. Returns [] if no file."""

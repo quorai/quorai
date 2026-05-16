@@ -279,14 +279,15 @@ def analyze_growth(financial_line_items: list) -> dict[str, any]:
         reasoning.append("Insufficient revenue data for CAGR calculation")
 
     # Net Income CAGR Analysis
-    net_incomes = [getattr(item, "net_income", None) for item in financial_line_items if getattr(item, "net_income", None) is not None and getattr(item, "net_income", None) > 0]
+    # Keep all non-None values; CAGR guard below requires positive oldest endpoint
+    net_incomes = [getattr(item, "net_income", None) for item in financial_line_items if getattr(item, "net_income", None) is not None]
 
     if len(net_incomes) >= 3:
         initial_income = net_incomes[-1]  # Oldest
         final_income = net_incomes[0]  # Latest
         years = len(net_incomes) - 1
 
-        if initial_income > 0:  # Fixed: Add zero check
+        if initial_income > 0 and final_income > 0:
             income_cagr = ((final_income / initial_income) ** (1 / years) - 1) * 100
 
             if income_cagr > 25:  # Very high growth
@@ -470,7 +471,7 @@ def assess_quality_metrics(financial_line_items: list) -> float:
         quality_factors.append(0.5)
 
     # Growth consistency
-    net_incomes = [getattr(item, "net_income", None) for item in financial_line_items[:4] if getattr(item, "net_income", None) is not None and getattr(item, "net_income", None) > 0]
+    net_incomes = [getattr(item, "net_income", None) for item in financial_line_items[:4] if getattr(item, "net_income", None) is not None]
 
     if len(net_incomes) >= 3:
         growing_years = sum(1 for i in range(1, len(net_incomes)) if net_incomes[i - 1] > net_incomes[i])
@@ -501,7 +502,7 @@ def calculate_intrinsic_value(financial_line_items: list, market_cap: float) -> 
             return None
 
         # Get historical earnings for growth calculation
-        net_incomes = [getattr(item, "net_income", None) for item in financial_line_items[:5] if getattr(item, "net_income", None) is not None and getattr(item, "net_income", None) > 0]
+        net_incomes = [getattr(item, "net_income", None) for item in financial_line_items[:5] if getattr(item, "net_income", None) is not None]
 
         if len(net_incomes) < 2:
             # Use current earnings with conservative multiple for stable companies
