@@ -470,6 +470,7 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     Returns:
         DataFrame with ADX values
     """
+    df = df.copy()
     # Calculate True Range
     df["high_low"] = df["high"] - df["low"]
     df["high_close"] = abs(df["high"] - df["close"].shift())

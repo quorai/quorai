@@ -313,7 +313,7 @@ def analyze_innovation_growth(metrics: list, financial_line_items: list) -> dict
     # 5. Growth Reinvestment Analysis
     dividends = [item.dividends_and_other_cash_distributions for item in financial_line_items if hasattr(item, "dividends_and_other_cash_distributions") and item.dividends_and_other_cash_distributions]
     if dividends and fcf_vals:
-        latest_payout_ratio = dividends[0] / fcf_vals[0] if fcf_vals[0] != 0 else 1
+        latest_payout_ratio = dividends[0] / fcf_vals[0] if fcf_vals[0] > 0 else 1
         if latest_payout_ratio < 0.2:  # Low dividend payout ratio suggests reinvestment focus
             score += 2
             details.append("Strong focus on reinvestment over dividends")

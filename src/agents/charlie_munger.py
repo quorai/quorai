@@ -669,7 +669,7 @@ def make_munger_facts_bundle(analysis: dict[str, any]) -> dict[str, any]:
         "low_leverage": (mgmt.get("recent_de_ratio") is not None and mgmt.get("recent_de_ratio") < 0.7),
         "sensible_cash": (mgmt.get("cash_to_revenue") is not None and 0.1 <= mgmt.get("cash_to_revenue") <= 0.25),
         "low_capex": None,  # inferred in moat score already; keep placeholder if you later expose a ratio
-        "mos_positive": (val.get("mos_to_reasonable") or 0) > 0.0,
+        "mos_positive": (val.get("margin_of_safety_vs_fair_value") or 0) > 0.0,
         "fcf_yield_ok": (val.get("fcf_yield") or 0) >= 0.05,
         "share_count_friendly": (mgmt.get("share_count_trend") == "decreasing"),
     }

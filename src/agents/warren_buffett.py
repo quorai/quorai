@@ -675,10 +675,11 @@ def analyze_pricing_power(financial_line_items: list, metrics: list) -> dict[str
         if hasattr(item, "gross_margin") and item.gross_margin is not None:
             gross_margins.append(item.gross_margin)
 
-    if len(gross_margins) >= 3:
-        # Check margin stability/improvement
-        recent_avg = sum(gross_margins[:2]) / 2 if len(gross_margins) >= 2 else gross_margins[0]
-        older_avg = sum(gross_margins[-2:]) / 2 if len(gross_margins) >= 2 else gross_margins[-1]
+    if len(gross_margins) >= 4:
+        # Split into non-overlapping recent vs older halves
+        mid = len(gross_margins) // 2
+        recent_avg = sum(gross_margins[:mid]) / mid
+        older_avg = sum(gross_margins[mid:]) / (len(gross_margins) - mid)
 
         if recent_avg > older_avg + 0.02:  # 2%+ improvement
             score += 3

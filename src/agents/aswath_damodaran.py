@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 
 from langchain_core.messages import HumanMessage
 
@@ -258,7 +259,7 @@ def analyze_relative_valuation(metrics: list) -> dict[str, any]:
         return {"score": 0, "max_score": max_score, "details": "P/E data sparse"}
 
     ttm_pe = pes[0]
-    median_pe = sorted(pes)[len(pes) // 2]
+    median_pe = statistics.median(pes)
 
     if ttm_pe < 0.7 * median_pe:
         score, desc = 1, f"P/E {ttm_pe:.1f} vs. median {median_pe:.1f} (cheap)"
@@ -303,18 +304,20 @@ def calculate_intrinsic_value_dcf(metrics: list, line_items: list, risk_analysis
     # Discount rate
     discount = risk_analysis.get("cost_of_equity") or 0.09
 
-    # Project FCFF and discount
+    # Project FCFF and discount (compound from prior year, not from fcff0 each time)
     pv_sum = 0.0
     g = base_growth
     g_step = (terminal_growth - base_growth) / (years - 1)
+    fcff_prev = fcff0
     for yr in range(1, years + 1):
-        fcff_t = fcff0 * (1 + g)
+        fcff_t = fcff_prev * (1 + g)
         pv = fcff_t / (1 + discount) ** yr
         pv_sum += pv
+        fcff_prev = fcff_t
         g += g_step
 
-    # Terminal value (perpetuity with terminal growth)
-    tv = fcff0 * (1 + terminal_growth) / (discount - terminal_growth) / (1 + discount) ** years
+    # Terminal value uses year-10 projected FCFF, not fcff0
+    tv = fcff_prev * (1 + terminal_growth) / (discount - terminal_growth) / (1 + discount) ** years
 
     equity_value = pv_sum + tv
     intrinsic_per_share = equity_value / shares

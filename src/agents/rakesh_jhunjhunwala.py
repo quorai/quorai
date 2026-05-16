@@ -305,10 +305,11 @@ def analyze_growth(financial_line_items: list) -> dict[str, any]:
     else:
         reasoning.append("Insufficient net income data for CAGR calculation")
 
-    # Revenue Consistency Check (year-over-year)
+    # Revenue Consistency Check (year-over-year); revenues is newest-first so
+    # revenues[i-1] > revenues[i] means newer > older = a growth year.
     if len(revenues) >= 3:
-        declining_years = sum(1 for i in range(1, len(revenues)) if revenues[i - 1] > revenues[i])
-        consistency_ratio = 1 - (declining_years / (len(revenues) - 1))
+        growing_years = sum(1 for i in range(1, len(revenues)) if revenues[i - 1] > revenues[i])
+        consistency_ratio = growing_years / (len(revenues) - 1)
 
         if consistency_ratio >= 0.8:  # 80% or more years with growth
             score += 1
@@ -472,8 +473,8 @@ def assess_quality_metrics(financial_line_items: list) -> float:
     net_incomes = [getattr(item, "net_income", None) for item in financial_line_items[:4] if getattr(item, "net_income", None) is not None and getattr(item, "net_income", None) > 0]
 
     if len(net_incomes) >= 3:
-        declining_years = sum(1 for i in range(1, len(net_incomes)) if net_incomes[i - 1] > net_incomes[i])
-        consistency = 1 - (declining_years / (len(net_incomes) - 1))
+        growing_years = sum(1 for i in range(1, len(net_incomes)) if net_incomes[i - 1] > net_incomes[i])
+        consistency = growing_years / (len(net_incomes) - 1)
         quality_factors.append(consistency)
     else:
         quality_factors.append(0.5)
