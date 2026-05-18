@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 import logging
 import time
 from typing import cast
@@ -7,7 +7,7 @@ from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.models import Asset, Order, Position, TradeAccount
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, GetPortfolioHistoryRequest, MarketOrderRequest
 from requests.exceptions import ConnectionError as _ConnError
 from requests.exceptions import Timeout as _Timeout
 
@@ -135,3 +135,18 @@ class AlpacaClient:
     def is_market_open_today(self) -> bool:
         clock = _retry_api_call(self._client.get_clock)
         return bool(clock.is_open)
+
+    def get_sod_equity(self, date: date) -> float:
+        """Return the prior-close equity for `date`, used as the SOD loss-limit baseline.
+
+        Alpaca's base_value for a 1-day portfolio history query is the previous trading
+        day's close — the correct anchor for the daily loss limit (no intraday P&L yet).
+        """
+        req = GetPortfolioHistoryRequest(period="1D", timeframe="1H", date_end=date)
+        history = _retry_api_call(self._client.get_portfolio_history, history_filter=req)
+        if history.base_value is None:
+            raise RuntimeError(
+                f"Alpaca returned no base_value for portfolio history on {date} — "
+                "cannot establish SOD equity; create logs/sod-equity-<date>.json manually"
+            )
+        return float(history.base_value)

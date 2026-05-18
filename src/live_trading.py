@@ -58,6 +58,17 @@ def _parse_args() -> argparse.Namespace:
 
     add_risk_profile_arg(parser)
     parser.add_argument("--force", action="store_true", help="Skip market-open check (useful for development/testing)")
+    parser.add_argument(
+        "--catch-up",
+        action="store_true",
+        dest="catch_up",
+        help=(
+            "Missed-cron recovery: if no SOD equity file exists, fetch the prior-close equity "
+            "from Alpaca's portfolio history and use it as the loss-limit baseline. "
+            "Safe to use intraday; the fetched value is the true start-of-day baseline, "
+            "not the (potentially depressed) current equity."
+        ),
+    )
     parser.add_argument("--confirm", action="store_true", help="Auto-confirm without interactive prompt")
     parser.add_argument(
         "--require-approval",
@@ -157,6 +168,7 @@ def main() -> None:
         idempotency_guard=idempotency_guard,
         request=run_request,
         risk_profile=profile,
+        catch_up=args.catch_up,
     )
 
     # Pre-flight: skip on non-trading days
