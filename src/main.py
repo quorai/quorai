@@ -102,6 +102,9 @@ def run_quorai(
         return {
             "decisions": parse_quorai_response(final_state["messages"][-1].content),
             "analyst_signals": final_state["data"]["analyst_signals"],
+            "group_signals": final_state["data"].get("group_signals", {}),
+            "debate_summaries": final_state["data"].get("debate_summaries", {}),
+            "current_prices": final_state["data"].get("current_prices", {}),
         }
     finally:
         # Stop progress tracking

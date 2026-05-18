@@ -184,6 +184,7 @@ class BacktestEngine:
                 agent=self._agent,
                 tickers=self._tickers,
                 run_id=run_id,
+                mode="backtest",
                 model_name=self._model_name,
                 model_provider=self._model_provider,
                 selected_analysts=self._selected_analysts,

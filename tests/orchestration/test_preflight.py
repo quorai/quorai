@@ -30,12 +30,15 @@ def _ctx(**overrides) -> PipelineContext:
     defaults = dict(
         agent=MagicMock(),
         tickers=["AAPL"],
+        run_id="test-run",
+        mode="backtest",
         model_name="test-model",
         model_provider="test",
         selected_analysts=None,
         llm_temperature=None,
         show_reasoning=False,
         use_regime_selection=False,
+        use_conviction_weights=False,
         conviction_weights={},
         signal_logger=None,
         request=None,
@@ -52,8 +55,9 @@ def _ctx(**overrides) -> PipelineContext:
 # ---------------------------------------------------------------------------
 
 
+@patch("src.orchestration.preflight._atomic_json_write")
 @patch("src.orchestration.preflight.SignalLogger")
-def test_build_opens_signal_logger(mock_logger_cls):
+def test_build_opens_signal_logger(mock_logger_cls, _mock_write):
     ctx = PipelineContext.build(
         agent=MagicMock(),
         tickers=["AAPL"],
@@ -62,12 +66,13 @@ def test_build_opens_signal_logger(mock_logger_cls):
         model_provider="p",
         enable_signal_log=True,
     )
-    mock_logger_cls.assert_called_once_with("my-run")
+    mock_logger_cls.assert_called_once_with("my-run", log_dir="logs")
     assert ctx.signal_log_path is not None
 
 
+@patch("src.orchestration.preflight._atomic_json_write")
 @patch("src.orchestration.preflight.SignalLogger")
-def test_build_skips_signal_logger_when_disabled(mock_logger_cls):
+def test_build_skips_signal_logger_when_disabled(mock_logger_cls, _mock_write):
     ctx = PipelineContext.build(
         agent=MagicMock(),
         tickers=["AAPL"],
@@ -80,9 +85,10 @@ def test_build_skips_signal_logger_when_disabled(mock_logger_cls):
     assert ctx.signal_log_path is None
 
 
+@patch("src.orchestration.preflight._atomic_json_write")
 @patch("src.orchestration.preflight.load_weights", return_value={"buffett": 0.8})
 @patch("src.orchestration.preflight.SignalLogger")
-def test_build_loads_conviction_weights(mock_logger_cls, mock_load_weights):
+def test_build_loads_conviction_weights(mock_logger_cls, mock_load_weights, _mock_write):
     ctx = PipelineContext.build(
         agent=MagicMock(),
         tickers=["AAPL"],
@@ -95,9 +101,10 @@ def test_build_loads_conviction_weights(mock_logger_cls, mock_load_weights):
     assert ctx._conviction_weights == {"buffett": 0.8}
 
 
+@patch("src.orchestration.preflight._atomic_json_write")
 @patch("src.orchestration.preflight.load_weights", return_value={})
 @patch("src.orchestration.preflight.SignalLogger")
-def test_build_skips_load_weights_when_not_enabled(mock_logger_cls, mock_load_weights):
+def test_build_skips_load_weights_when_not_enabled(mock_logger_cls, mock_load_weights, _mock_write):
     PipelineContext.build(
         agent=MagicMock(),
         tickers=["AAPL"],
@@ -180,12 +187,12 @@ def test_regime_selection_narrows_analysts():
     )
 
     with (
-        patch("src.orchestration.preflight.classify_regime") as mock_classify,
+        patch("src.orchestration.preflight.classify_regime_with_indicators") as mock_classify,
         patch("src.orchestration.preflight.select_analysts_for_regime") as mock_select,
     ):
         from src.regime.classifier import MarketRegime
 
-        mock_classify.return_value = MarketRegime.BULL_TREND
+        mock_classify.return_value = (MarketRegime.BULL_TREND, {})
         mock_select.return_value = ["growth_analyst"]
 
         ctx.run_cycle(
@@ -205,12 +212,12 @@ def test_regime_selection_falls_back_when_returns_none():
     ctx = _ctx(selected_analysts=base, use_regime_selection=True)
 
     with (
-        patch("src.orchestration.preflight.classify_regime") as mock_classify,
+        patch("src.orchestration.preflight.classify_regime_with_indicators") as mock_classify,
         patch("src.orchestration.preflight.select_analysts_for_regime") as mock_select,
     ):
         from src.regime.classifier import MarketRegime
 
-        mock_classify.return_value = MarketRegime.NEUTRAL
+        mock_classify.return_value = (MarketRegime.NEUTRAL, {})
         mock_select.return_value = None  # None = all groups
 
         ctx.run_cycle(
@@ -261,7 +268,7 @@ def test_regime_selection_disabled_ignores_spy_df():
     base = ["analyst_a"]
     ctx = _ctx(selected_analysts=base, use_regime_selection=False)
 
-    with patch("src.orchestration.preflight.classify_regime") as mock_classify:
+    with patch("src.orchestration.preflight.classify_regime_with_indicators") as mock_classify:
         ctx.run_cycle(
             date="2026-01-15",
             lookback_start="2025-12-15",

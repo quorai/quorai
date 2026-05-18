@@ -82,5 +82,10 @@ class AgentController:
             "decisions": normalized_decisions,
             "analyst_signals": analyst_signals_in,
             "token_usage": get_token_log(),
+            # Full PM decisions preserve confidence and reasoning dropped by normalization
+            "pm_decisions": decisions_in,
+            "group_signals": dict(output.get("group_signals", {})) if isinstance(output, dict) else {},
+            "debate_summaries": dict(output.get("debate_summaries", {})) if isinstance(output, dict) else {},
+            "current_prices": dict(output.get("current_prices", {})) if isinstance(output, dict) else {},
         }
         return normalized_output
