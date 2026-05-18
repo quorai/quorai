@@ -51,11 +51,13 @@ class LiveExecutor:
         prices = current_prices or {}
         self.submitted_orders = {}
 
+        is_override_run = False
         if not dry_run and self._idempotency_guard is not None:
             allowed, reason = self._idempotency_guard.check()
             if not allowed:
                 logger.warning("[executor] idempotency guard blocked run: %s", reason)
                 return {ticker: f"skipped (idempotency: {reason})" for ticker in decisions}
+            is_override_run = reason == "override_approved"
 
         pending: set[tuple[str, str]] = set()
         if not dry_run:
@@ -172,8 +174,18 @@ class LiveExecutor:
             # Deterministic client_order_id lets the broker reject a duplicate
             # submission if we retry after a crash — the journal "pending" row
             # written below provides a local crash-recovery audit trail.
+            # On operator-approved re-runs, append -r{N} so the broker accepts
+            # the new order while still being idempotent within that re-run.
             date_prefix = now_ny().strftime("%Y-%m-%d")
-            client_order_id = f"{date_prefix}-{ticker}-{action}"
+            if is_override_run and self._journal:
+                prior_count = sum(
+                    1
+                    for e in self._journal.list_submitted_today()
+                    if e.get("ticker") == ticker and e.get("action") == action
+                )
+                client_order_id = f"{date_prefix}-{ticker}-{action}-r{prior_count + 1}"
+            else:
+                client_order_id = f"{date_prefix}-{ticker}-{action}"
 
             if self._journal:
                 self._journal.record(
