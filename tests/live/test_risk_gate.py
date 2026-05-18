@@ -117,3 +117,74 @@ def test_daily_loss_limit_just_below_boundary(tmp_path):
     # -2.99% drawdown — just under the 3% limit
     allowed, reason = _check(gate, account_equity=97_010.0, sod_equity=100_000.0)
     assert allowed is True, f"Drawdown below limit must be allowed, got: {reason}"
+
+
+# --- Closing-trade notional exemption ---
+
+def test_sell_closing_long_exempt_from_notional_cap(tmp_path):
+    """Selling all of a held long position bypasses the notional cap."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
+    # 100 shares × $300 = $30K gross, but entire qty closes existing long → allowed
+    allowed, reason = _check(gate, action="sell", side="sell", qty=100.0, price=300.0, current_long=100.0)
+    assert allowed is True, f"Expected allowed, got: {reason}"
+
+
+def test_cover_closing_short_exempt_from_notional_cap(tmp_path):
+    """Covering all of a held short position bypasses the notional cap."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
+    # 200 shares × $80 = $16K gross, but entire qty covers existing short → allowed
+    allowed, reason = _check(gate, action="cover", side="buy", qty=200.0, price=80.0, current_short=200.0)
+    assert allowed is True, f"Expected allowed, got: {reason}"
+
+
+def test_sell_partial_close_then_flip_capped(tmp_path):
+    """A sell that exceeds the long position: only the flip portion counts against the cap."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
+    # 200 qty, 50 long → closing=50, opening=150; 150 × $100 = $15K > $10K → rejected
+    allowed, reason = _check(gate, action="sell", side="sell", qty=200.0, price=100.0, current_long=50.0)
+    assert allowed is False
+    assert reason == "notional_exceeded"
+
+
+def test_buy_not_exempt(tmp_path):
+    """Buy orders are never closing trades — the full notional is checked."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
+    allowed, reason = _check(gate, action="buy", side="buy", qty=100.0, price=300.0, current_long=0.0)
+    assert allowed is False
+    assert reason == "notional_exceeded"
+
+
+def test_short_not_exempt(tmp_path):
+    """Short orders open new exposure — the full notional is checked."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
+    allowed, reason = _check(gate, action="short", side="sell", qty=100.0, price=300.0, current_short=0.0)
+    assert allowed is False
+    assert reason == "notional_exceeded"
+
+
+def test_closing_sell_still_hits_daily_loss_limit(tmp_path):
+    """Closing a long does not bypass the daily loss limit."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0, DAILY_LOSS_LIMIT_PCT=0.05)
+    allowed, reason = _check(
+        gate, action="sell", side="sell", qty=100.0, price=300.0,
+        current_long=100.0, account_equity=90_000.0, sod_equity=100_000.0,
+    )
+    assert allowed is False
+    assert reason == "daily_loss_limit"
+
+
+def test_closing_sell_still_hits_qty_cap(tmp_path):
+    """Closing a long does not bypass the per-order quantity cap."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0, MAX_ORDER_QTY=50.0)
+    allowed, reason = _check(gate, action="sell", side="sell", qty=100.0, price=1.0, current_long=100.0)
+    assert allowed is False
+    assert reason == "qty_exceeded"
+
+
+def test_backward_compat_no_position_args(tmp_path):
+    """Calling check() without current_long/current_short treats the order as opening (old behavior)."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
+    # Would be a closing sell, but no position provided → treated as opening → capped
+    allowed, reason = _check(gate, action="sell", side="sell", qty=100.0, price=300.0)
+    assert allowed is False
+    assert reason == "notional_exceeded"

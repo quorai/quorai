@@ -21,9 +21,19 @@ class RiskGate:
         price: float,
         account_equity: float,
         sod_equity: float,
+        current_long: float = 0.0,
+        current_short: float = 0.0,
     ) -> tuple[bool, str]:
         """Returns (allowed, reason). Records rejection to journal if not allowed."""
-        reason = self._evaluate(qty=qty, price=price, account_equity=account_equity, sod_equity=sod_equity)
+        reason = self._evaluate(
+            action=action,
+            qty=qty,
+            price=price,
+            account_equity=account_equity,
+            sod_equity=sod_equity,
+            current_long=current_long,
+            current_short=current_short,
+        )
         if reason:
             logger.warning("[risk_gate] Rejecting %s %s: %s", action, ticker, reason)
             self._journal.record(
@@ -37,11 +47,30 @@ class RiskGate:
             return False, reason
         return True, ""
 
-    def _evaluate(self, *, qty: float, price: float, account_equity: float, sod_equity: float) -> str:
+    def _evaluate(
+        self,
+        *,
+        action: str,
+        qty: float,
+        price: float,
+        account_equity: float,
+        sod_equity: float,
+        current_long: float,
+        current_short: float,
+    ) -> str:
         s = self._settings
         if s.KILL_SWITCH:
             return "kill_switch_active"
-        if qty * price > s.MAX_ORDER_NOTIONAL:
+        # Closing trades reduce exposure and bypass the notional cap.
+        # Only the portion that opens new exposure (e.g. a sell that exceeds the long) is capped.
+        if action == "sell":
+            closing_qty = min(qty, current_long)
+        elif action == "cover":
+            closing_qty = min(qty, current_short)
+        else:
+            closing_qty = 0.0
+        opening_qty = max(0.0, qty - closing_qty)
+        if opening_qty * price > s.MAX_ORDER_NOTIONAL:
             return "notional_exceeded"
         if qty > s.MAX_ORDER_QTY:
             return "qty_exceeded"

@@ -63,14 +63,18 @@ class LiveExecutor:
                 if order.symbol is not None and order.side is not None:
                     pending.add((order.symbol, order.side.value))
 
-        # Pre-fetch current short positions once for cover qty clamping.
+        # Pre-fetch positions for risk-gate closing-trade exemption + cover qty clamping.
+        current_longs: dict[str, float] = {}
         current_shorts: dict[str, float] = {}
         has_cover = any(d.get("action") == "cover" for d in decisions.values())
-        if has_cover and not dry_run:
+        needs_positions = (self._risk_gate is not None or has_cover) and not dry_run
+        if needs_positions:
             for pos in self._broker.get_positions():
-                qty = float(pos.qty)
-                if qty < 0:
-                    current_shorts[pos.symbol] = abs(qty)
+                pq = float(pos.qty)
+                if pq > 0:
+                    current_longs[pos.symbol] = pq
+                elif pq < 0:
+                    current_shorts[pos.symbol] = abs(pq)
 
         account_equity = 0.0
         if self._risk_gate and not dry_run:
@@ -151,6 +155,8 @@ class LiveExecutor:
                     price=price,
                     account_equity=account_equity,
                     sod_equity=self._sod_equity,
+                    current_long=current_longs.get(ticker, 0.0),
+                    current_short=current_shorts.get(ticker, 0.0),
                 )
                 if not allowed:
                     logger.warning("[executor] %s rejected by risk gate: %s", ticker, reason)
