@@ -122,7 +122,7 @@ with a shared `BaseSignal` Pydantic schema (`src/agents/_signals.py`) containing
 (bullish/bearish/neutral), `confidence` (int 0–100), and `reasoning`, and writes results to
 `state["data"]["analyst_signals"][agent_id]`.
 
-**Debate node** (`src/agents/debate_node.py`): aggregates individual analyst signals into 5
+**Debate node** (`src/agents/debate_node.py`): aggregates individual analyst signals into 6
 strategy groups (`deep_value`, `growth_and_catalyst`, `macro_and_cycle`, `quant_systematic`,
 `quality_compounders`, `sentiment_and_analytical`). Within each group, signals are weighted by
 per-agent conviction weights loaded from `src/feedback/weights.json` (when
