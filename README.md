@@ -55,7 +55,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 - **Multi-provider LLM support** — OpenAI, Anthropic, Groq, Gemini, DeepSeek, xAI, OpenRouter
 - **Backtesting engine** — replay historical data with full agent deliberation and portfolio metrics
 - **Live / paper trading** — execute via Alpaca with optional Telegram approval gate
-- **Bull/bear debate node** — agents argue opposing sides before the portfolio manager decides
+- **Group-level debate node** — collapses 25 analyst signals into 5 strategy groups via confidence-weighted aggregation; an LLM moderator summarises contested tickers
 - **Market-regime selection** — classifies the current SPY regime (bull/bear/risk-off/neutral) each day and narrows the active analyst subset accordingly
 - **Conviction-weight feedback loop** — tracks each agent's rolling directional hit-rate; high-accuracy agents receive proportionally more weight in the debate aggregation
 - **Signal logging + forward-return labeling** — persists every per-agent-per-ticker signal to JSONL during a backtest run; a separate labeler attaches 1d/5d/20d forward returns so hit-rates can be computed
@@ -105,6 +105,22 @@ The pipeline runs as a LangGraph `StateGraph`: `start_node` fans out to all sele
 ```
 start_node → [analyst_1 … analyst_25] → debate_node → risk_management_agent → portfolio_manager → END
 ```
+
+### Debate node
+
+The debate node (`src/agents/debate_node.py`) runs in two phases:
+
+1. **Group aggregation (deterministic).** The 25 analyst signals are collapsed into 5 strategy groups: `deep_value`, `growth_and_catalyst`, `macro_and_cycle`, `quant_systematic`, `quality_compounders`. Within each group, signals are **confidence-weighted** (not majority-voted): each agent's stance (`bullish` → +1, `neutral` → 0, `bearish` → −1) is multiplied by its confidence (and optionally by its conviction weight from `weights.json`), then averaged.
+
+   | Weighted stance | Group signal |
+   |---|---|
+   | ≥ +0.25 | bullish |
+   | ≤ −0.25 | bearish |
+   | otherwise | neutral |
+
+2. **Moderator synthesis (LLM).** Only for *contested* tickers — at least one bullish group AND at least one bearish group — an LLM moderator receives the group stances and their top-2 arguments, and returns a `DebateSummary` with each group's one-sentence position, the root structural disagreement, and a `consensus_strength` label (`strong_agreement` / `mixed` / `structural_split`).
+
+Individual agents do not argue with each other; the "debate" is between the five group-level positions, and only contested tickers incur the extra LLM call.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design — data layer, LLM dispatch, backtesting internals, regime classifier, conviction-weight feedback loop, token telemetry, live trading layer, and per-ticker parallelism.
 
