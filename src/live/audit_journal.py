@@ -1,13 +1,11 @@
-from datetime import datetime
 import json
 import logging
 import os
 import threading
-from zoneinfo import ZoneInfo
+
+from src.utils.tz import now_ny
 
 logger = logging.getLogger(__name__)
-
-_NY = ZoneInfo("America/New_York")
 
 
 class AuditJournal:
@@ -17,7 +15,7 @@ class AuditJournal:
         os.makedirs(log_dir, exist_ok=True)
 
     def _log_path(self) -> str:
-        ny_date = datetime.now(_NY).strftime("%Y-%m-%d")
+        ny_date = now_ny().strftime("%Y-%m-%d")
         return os.path.join(self._log_dir, f"trades-{ny_date}.jsonl")
 
     def record(

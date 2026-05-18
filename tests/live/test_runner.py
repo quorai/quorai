@@ -109,3 +109,22 @@ def test_dry_run_skips_sod_equity_save(mock_pipeline_cls, mock_to_snapshot):
 
     mock_save.assert_not_called()
     assert runner._sod_equity == 75_000.0
+
+
+@patch("src.live.runner.to_snapshot")
+@patch("src.live.runner.PipelineContext")
+def test_catch_up_fetches_sod_from_broker_history(mock_pipeline_cls, mock_to_snapshot):
+    """catch_up=True fetches SOD from broker history and saves with allow_intraday=True."""
+    broker = _make_broker(equity=98_000.0)
+    broker.get_sod_equity = MagicMock(return_value=100_000.0)
+    mock_to_snapshot.return_value = _make_snapshot()
+    mock_pipeline_cls.build.return_value = _make_ctx(decisions={})
+
+    runner = _make_runner(broker, catch_up=True)
+
+    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save:
+        runner.prepare()
+
+    broker.get_sod_equity.assert_called_once()
+    mock_save.assert_called_once_with(100_000.0, allow_intraday=True)
+    assert runner._sod_equity == 100_000.0

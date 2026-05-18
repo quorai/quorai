@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta
 import sys
-from zoneinfo import ZoneInfo
 
 from colorama import Fore, Style, init
 
@@ -12,12 +11,11 @@ from src.llm.models import check_provider_api_key
 from src.main import run_quorai
 from src.risk_profiles import get_profile
 from src.utils.analysts import ALL_ANALYST_KEYS
+from src.utils.tz import now_ny
 from src.utils.validation import validate_ticker
 
 from .comparison import RunConfig, run_comparison
 from .engine import BacktestEngine
-
-_NY = ZoneInfo("America/New_York")
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -60,7 +58,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _resolve_dates(args: argparse.Namespace) -> tuple[str, str]:
-    end_date = args.end_date or datetime.now(_NY).strftime("%Y-%m-%d")
+    end_date = args.end_date or now_ny().strftime("%Y-%m-%d")
     start_date = args.start_date or (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=args.days)).strftime("%Y-%m-%d")
     return start_date, end_date
 

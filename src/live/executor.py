@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 import math
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from src.backtesting.types import AgentDecisions
 from src.broker import Broker
 from src.live.audit_journal import AuditJournal
 from src.live.risk_gate import RiskGate
+from src.utils.tz import now_ny
 
 if TYPE_CHECKING:
     from src.live.idempotency_guard import IdempotencyGuard
@@ -167,7 +166,7 @@ class LiveExecutor:
             # Deterministic client_order_id lets the broker reject a duplicate
             # submission if we retry after a crash — the journal "pending" row
             # written below provides a local crash-recovery audit trail.
-            date_prefix = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+            date_prefix = now_ny().strftime("%Y-%m-%d")
             client_order_id = f"{date_prefix}-{ticker}-{side}"
 
             if self._journal:

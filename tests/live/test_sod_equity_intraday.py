@@ -16,9 +16,7 @@ def test_save_before_market_open_succeeds(tmp_path):
 
     pre_open = datetime(2024, 1, 15, 8, 0, 0, tzinfo=_NY)
 
-    with patch.object(mod, "datetime") as mock_dt:
-        mock_dt.now.return_value = pre_open
-
+    with patch("src.live.sod_equity.now_ny", return_value=pre_open):
         mod.save_sod_equity(100_000.0, log_dir=str(tmp_path))
 
     files = list(tmp_path.iterdir())
@@ -33,9 +31,7 @@ def test_save_at_market_open_raises(tmp_path):
 
     at_open = datetime(2024, 1, 15, 9, 30, 0, tzinfo=_NY)
 
-    with patch.object(mod, "datetime") as mock_dt:
-        mock_dt.now.return_value = at_open
-
+    with patch("src.live.sod_equity.now_ny", return_value=at_open):
         with pytest.raises(RuntimeError, match="intraday"):
             mod.save_sod_equity(98_000.0, log_dir=str(tmp_path))
 
@@ -48,9 +44,7 @@ def test_save_after_market_open_raises(tmp_path):
 
     post_open = datetime(2024, 1, 15, 11, 0, 0, tzinfo=_NY)
 
-    with patch.object(mod, "datetime") as mock_dt:
-        mock_dt.now.return_value = post_open
-
+    with patch("src.live.sod_equity.now_ny", return_value=post_open):
         with pytest.raises(RuntimeError, match="intraday"):
             mod.save_sod_equity(95_000.0, log_dir=str(tmp_path))
 
@@ -61,8 +55,23 @@ def test_error_message_includes_manual_instructions(tmp_path):
 
     post_open = datetime(2024, 1, 15, 14, 0, 0, tzinfo=_NY)
 
-    with patch.object(mod, "datetime") as mock_dt:
-        mock_dt.now.return_value = post_open
-
+    with patch("src.live.sod_equity.now_ny", return_value=post_open):
         with pytest.raises(RuntimeError, match="manually"):
             mod.save_sod_equity(90_000.0, log_dir=str(tmp_path))
+
+
+def test_allow_intraday_bypasses_guard(tmp_path):
+    """allow_intraday=True permits writing the SOD file post-09:30 ET."""
+    import src.live.sod_equity as mod
+
+    post_open = datetime(2024, 1, 15, 11, 0, 0, tzinfo=_NY)
+
+    with patch("src.live.sod_equity.now_ny", return_value=post_open):
+        mod.save_sod_equity(100_000.0, log_dir=str(tmp_path), allow_intraday=True)
+
+    files = list(tmp_path.iterdir())
+    assert len(files) == 1
+    import json
+
+    data = json.loads(files[0].read_text())
+    assert data["equity"] == 100_000.0

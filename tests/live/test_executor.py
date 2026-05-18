@@ -259,8 +259,7 @@ def test_client_order_id_uses_ny_date(tmp_path):
     journal = AuditJournal(log_dir=str(tmp_path))
     executor = LiveExecutor(broker=broker, journal=journal)
 
-    with patch("src.live.executor.datetime") as mock_dt:
-        mock_dt.now.return_value = ny_time
+    with patch("src.live.executor.now_ny", return_value=ny_time):
         results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 1.0}})
 
     assert results["AAPL"] == "submitted"

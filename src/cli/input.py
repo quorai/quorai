@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from datetime import datetime
 import sys
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from colorama import Fore, Style
 from dateutil.relativedelta import relativedelta
@@ -11,8 +10,7 @@ import questionary
 
 from src.llm.models import AVAILABLE_MODELS, LLM_ORDER, find_model_by_name, get_model_info
 from src.utils.analysts import ALL_ANALYST_KEYS, ANALYST_ORDER
-
-_NY = ZoneInfo("America/New_York")
+from src.utils.tz import now_ny
 
 
 def add_common_args(
@@ -51,13 +49,13 @@ def add_date_args(parser: argparse.ArgumentParser, *, default_months_back: int |
         parser.add_argument(
             "--end-date",
             type=str,
-            default=datetime.now(_NY).strftime("%Y-%m-%d"),
+            default=now_ny().strftime("%Y-%m-%d"),
             help="End date in YYYY-MM-DD format",
         )
         parser.add_argument(
             "--start-date",
             type=str,
-            default=(datetime.now(_NY) - relativedelta(months=default_months_back)).strftime("%Y-%m-%d"),
+            default=(now_ny() - relativedelta(months=default_months_back)).strftime("%Y-%m-%d"),
             help="Start date in YYYY-MM-DD format",
         )
     return parser
@@ -161,7 +159,7 @@ def resolve_dates(start_date: str | None, end_date: str | None, *, default_month
         except ValueError:
             raise ValueError("End date must be in YYYY-MM-DD format")
 
-    final_end = end_date or datetime.now(_NY).strftime("%Y-%m-%d")
+    final_end = end_date or now_ny().strftime("%Y-%m-%d")
     if start_date:
         final_start = start_date
     else:

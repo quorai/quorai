@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from src.backtesting.types import AgentDecisions, PortfolioSnapshot
 from src.broker import Broker
@@ -17,6 +16,7 @@ from src.live.sod_equity import load_sod_equity, save_sod_equity
 from src.llm.request import RunRequest
 from src.orchestration.preflight import PipelineContext
 from src.risk_profiles import RiskProfile
+from src.utils.tz import now_ny
 
 if TYPE_CHECKING:
     from src.live.idempotency_guard import IdempotencyGuard
@@ -45,6 +45,7 @@ class LiveRunner:
         idempotency_guard: IdempotencyGuard | None = None,
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
+        catch_up: bool = False,
     ) -> None:
         self.tickers = tickers
         self.model_name = model_name
@@ -63,6 +64,7 @@ class LiveRunner:
         self._idempotency_guard = idempotency_guard
         self._request = request
         self._risk_profile = risk_profile
+        self._catch_up = catch_up
         self._sod_equity: float = 0.0
         self._signal_log_path: str | None = None
         self._token_summary_data: dict = {}
@@ -101,13 +103,20 @@ class LiveRunner:
         account_equity = float(account.equity or "0")
         sod = load_sod_equity()
         if sod is None:
-            if not self.dry_run:
+            if self.dry_run:
+                sod = account_equity
+            elif self._catch_up:
+                today = now_ny().date()
+                sod = self._broker.get_sod_equity(today)
+                save_sod_equity(sod, allow_intraday=True)
+                logger.info("[runner] catch-up: SOD equity backfilled from broker history: %.2f", sod)
+            else:
                 save_sod_equity(account_equity)
-            sod = account_equity
+                sod = account_equity
         self._sod_equity = sod
 
         # 3. Build lookback window
-        today = datetime.now(ZoneInfo("America/New_York")).date()
+        today = now_ny().date()
         start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         end_date = today.strftime("%Y-%m-%d")
 
@@ -138,6 +147,7 @@ class LiveRunner:
             agent=run_quorai,
             tickers=self.tickers,
             run_id=f"live-{end_date}",
+            mode="live",
             model_name=self.model_name,
             model_provider=self.model_provider,
             selected_analysts=self.selected_analysts,
