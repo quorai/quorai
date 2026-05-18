@@ -266,3 +266,55 @@ def test_client_order_id_uses_ny_date(tmp_path):
     order_id = broker.submit_order.call_args.kwargs["client_order_id"]
     # Must use 2024-01-15 (NY date), not 2024-01-16 (UTC date after midnight)
     assert order_id.startswith("2024-01-15"), f"Got client_order_id: {order_id}"
+
+
+# R25b — sell vs short (and buy vs cover) must produce distinct client_order_ids
+
+
+def test_client_order_id_sell_vs_short_are_distinct():
+    """sell and short both map to side='sell' but must have different client_order_ids."""
+    from unittest.mock import patch
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    ny_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    with patch("src.live.executor.now_ny", return_value=ny_time):
+        broker_sell = _make_broker()
+        executor_sell = LiveExecutor(broker=broker_sell)
+        executor_sell.execute_decisions({"AAPL": {"action": "sell", "quantity": 5.0}})
+        id_sell = broker_sell.submit_order.call_args.kwargs["client_order_id"]
+
+        broker_short = _make_broker()
+        executor_short = LiveExecutor(broker=broker_short)
+        executor_short.execute_decisions({"AAPL": {"action": "short", "quantity": 5.0}})
+        id_short = broker_short.submit_order.call_args.kwargs["client_order_id"]
+
+    assert id_sell != id_short, f"sell and short produced same id: {id_sell}"
+    assert id_sell.endswith("-sell"), id_sell
+    assert id_short.endswith("-short"), id_short
+
+
+def test_client_order_id_buy_vs_cover_are_distinct():
+    """buy and cover both map to side='buy' but must have different client_order_ids."""
+    from unittest.mock import patch
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    ny_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+    pos = _make_position("AAPL", "-10")
+
+    with patch("src.live.executor.now_ny", return_value=ny_time):
+        broker_buy = _make_broker()
+        executor_buy = LiveExecutor(broker=broker_buy)
+        executor_buy.execute_decisions({"AAPL": {"action": "buy", "quantity": 5.0}})
+        id_buy = broker_buy.submit_order.call_args.kwargs["client_order_id"]
+
+        broker_cover = _make_broker(positions=[pos])
+        executor_cover = LiveExecutor(broker=broker_cover)
+        executor_cover.execute_decisions({"AAPL": {"action": "cover", "quantity": 5.0}})
+        id_cover = broker_cover.submit_order.call_args.kwargs["client_order_id"]
+
+    assert id_buy != id_cover, f"buy and cover produced same id: {id_buy}"
+    assert id_buy.endswith("-buy"), id_buy
+    assert id_cover.endswith("-cover"), id_cover

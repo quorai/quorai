@@ -173,7 +173,7 @@ class LiveExecutor:
             # submission if we retry after a crash — the journal "pending" row
             # written below provides a local crash-recovery audit trail.
             date_prefix = now_ny().strftime("%Y-%m-%d")
-            client_order_id = f"{date_prefix}-{ticker}-{side}"
+            client_order_id = f"{date_prefix}-{ticker}-{action}"
 
             if self._journal:
                 self._journal.record(
