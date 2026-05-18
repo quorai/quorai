@@ -1,7 +1,7 @@
 # Quorai
 
 <p align="center">
-  <img src="assets/logo-detailed.jpeg" alt="Quorai Logo" width="400"/>
+  <img src="assets/quorai-logo.png" alt="Quorai Logo" width="400"/>
 </p>
 
 *A quorum of AI agents deliberating trading decisions. Pronounced "KWOR-eye" (quorum + AI).*

@@ -47,6 +47,7 @@ Thumbs.db
 
 # graph
 *.png
+!assets/quorai-logo.png
 
 # Txt files
 *.txt
