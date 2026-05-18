@@ -92,7 +92,7 @@ def _aggregate_to_groups(
 
 class GroupStance(BaseModel):
     group: str
-    stance: Literal["bullish", "bearish", "neutral"]
+    stance: Literal["neutral", "bullish", "bearish"]
     key_argument: str = Field(description="One-sentence summary of this group's strongest argument, ≤120 chars")
 
 

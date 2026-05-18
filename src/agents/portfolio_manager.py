@@ -11,7 +11,7 @@ from src.utils.progress import progress
 
 
 class PortfolioDecision(BaseModel):
-    action: Literal["buy", "sell", "short", "cover", "hold"]
+    action: Literal["hold", "buy", "sell", "short", "cover"]
     quantity: float = Field(description="Number of shares to trade. Fractional quantities are supported (e.g. 1.5).")
     confidence: int = Field(description="Confidence 0-100")
     reasoning: str = Field(description="Reasoning for the decision")

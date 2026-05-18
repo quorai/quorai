@@ -47,7 +47,7 @@ class ArticleSentiment(BaseModel):
     """Sentiment classification for one article in a batch."""
 
     index: int
-    sentiment: Literal["positive", "negative", "neutral"]
+    sentiment: Literal["neutral", "positive", "negative"]
     confidence: int = Field(description="Confidence 0-100", validation_alias=AliasChoices("confidence", "confidence_score"))
 
 
@@ -61,7 +61,7 @@ class BatchSentiment(BaseModel):
 class Sentiment(BaseModel):
     """Represents the sentiment of a single news article."""
 
-    sentiment: Literal["positive", "negative", "neutral"]
+    sentiment: Literal["neutral", "positive", "negative"]
     confidence: int = Field(description="Confidence 0-100", validation_alias=AliasChoices("confidence", "confidence_score"))
 
 

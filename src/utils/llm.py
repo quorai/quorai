@@ -241,12 +241,15 @@ def call_llm(
 
     # Three-tier structured output dispatch:
     #   1. Anthropic / OpenAI — provider enforces the schema server-side (tool_use / json_schema)
-    #   2. Other json-mode providers (Groq, xAI, OpenRouter …) — JSON hint only
-    #   3. DeepSeek / Gemini — no json_mode; parse manually from markdown fences
+    #   2. Other json-mode providers (Groq, xAI, OpenRouter …) — response_format json_object
+    #   3. DeepSeek / Gemini (direct, not via OpenRouter) — no json_mode; manual extraction
     #
-    # When model_info is None (unlisted model), fall back on the name: DeepSeek and Gemini
-    # reject the response_format parameter that json_mode sends, so use manual extraction.
+    # When model_info is None (unlisted model), fall back on the name+provider: DeepSeek and
+    # Gemini reject response_format when called directly, but OpenRouter normalises it, so
+    # OpenRouter-routed models always use Tier 2 regardless of the underlying model name.
     def _name_implies_manual(name: str, provider: str) -> bool:
+        if provider and provider.lower() == "openrouter":
+            return False
         n = name.lower()
         return "deepseek" in n or "gemini" in n
 
@@ -272,7 +275,7 @@ def call_llm(
 
     for attempt in range(max_retries):
         try:
-            if attempt > 0 and use_manual_extraction:
+            if use_manual_extraction:
                 if hasattr(prompt, "messages"):
                     invoke_prompt = list(prompt.messages) + [hint]
                 elif isinstance(prompt, list):

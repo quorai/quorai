@@ -60,10 +60,10 @@ class LLMModel(BaseModel):
 
     def has_json_mode(self) -> bool:
         """Check if the model supports JSON mode"""
-        if self.is_deepseek() or self.is_gemini():
-            return False
         if self.provider == ModelProvider.OPENROUTER:
             return True  # OpenRouter normalises response_format for all routed models
+        if self.is_deepseek() or self.is_gemini():
+            return False
         return True
 
     def is_deepseek(self) -> bool:

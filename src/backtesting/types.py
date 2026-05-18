@@ -16,7 +16,7 @@ class Action(str, Enum):
 
 
 # Backward-compatible alias
-ActionLiteral = Literal["buy", "sell", "short", "cover", "hold"]
+ActionLiteral = Literal["hold", "buy", "sell", "short", "cover"]
 
 
 class PositionState(TypedDict):
@@ -74,6 +74,10 @@ class _AgentOutputRequired(TypedDict):
 
 class AgentOutput(_AgentOutputRequired, total=False):
     token_usage: list[dict]  # per-call records from get_token_log()
+    pm_decisions: Dict[str, Any]  # full PM decisions {ticker: {action, quantity, confidence, reasoning}}
+    group_signals: Dict[str, Any]  # {ticker: {group: {signal, confidence, dissent, key_args}}}
+    debate_summaries: Dict[str, Any]  # {ticker: {group_positions, core_disagreement, consensus_strength}}
+    current_prices: Dict[str, float]  # per-ticker price from risk manager
 
 
 # Use functional style to allow keys with spaces to mirror current code
