@@ -146,6 +146,8 @@ class PipelineContext:
         self._cycle_dates: list[str] = []
         self._cycle_files: list[str] = []
         self._last_cycle_path: Path | None = None
+        self._bundle_write_failures: int = 0
+        self._manifest_write_failures: int = 0
 
     @classmethod
     def build(
@@ -347,6 +349,7 @@ class PipelineContext:
             self._cycle_files.append(rel_path)
             self._write_run_manifest("running")
         except Exception:
+            self._bundle_write_failures += 1
             logger.exception("Failed to write cycle bundle for run=%s date=%s", self._run_id, date)
 
     def finalize_cycle(
@@ -409,6 +412,7 @@ class PipelineContext:
             manifest_path = runs_dir / f"{self._run_id}.json"
             _atomic_json_write(manifest_path, manifest)
         except Exception:
+            self._manifest_write_failures += 1
             logger.exception("Failed to write run manifest for run=%s", self._run_id)
 
     @property
@@ -417,7 +421,10 @@ class PipelineContext:
 
     def token_summary(self) -> dict:
         """Return aggregated token-usage stats accumulated across all run_cycle calls."""
-        return _token_summary(self._token_usage)
+        summary = _token_summary(self._token_usage)
+        summary["bundle_write_failures"] = self._bundle_write_failures
+        summary["manifest_write_failures"] = self._manifest_write_failures
+        return summary
 
     def close(self) -> None:
         if self._signal_logger is not None:

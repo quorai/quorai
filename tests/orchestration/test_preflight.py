@@ -310,7 +310,27 @@ def test_token_usage_accumulates_across_cycles():
 
 def test_token_summary_returns_empty_when_no_cycles():
     ctx = _ctx()
-    assert ctx.token_summary() == {}
+    summary = ctx.token_summary()
+    # No LLM calls → no call stats, but failure counters are always present
+    assert "calls" not in summary
+    assert summary["bundle_write_failures"] == 0
+    assert summary["manifest_write_failures"] == 0
+
+
+@patch("src.orchestration.preflight._atomic_json_write", side_effect=OSError("disk full"))
+def test_bundle_write_failure_counted(_mock_write):
+    ctx = _ctx()
+    ctx.run_cycle(date="2026-01-15", lookback_start="2025-12-15", portfolio=_portfolio(), signal_prices={})
+    assert ctx._bundle_write_failures == 1
+    assert ctx._cycle_files == [], "failed write must not be appended to _cycle_files"
+
+
+@patch("src.orchestration.preflight._atomic_json_write", side_effect=OSError("disk full"))
+def test_token_summary_includes_failure_count(_mock_write):
+    ctx = _ctx()
+    ctx.run_cycle(date="2026-01-15", lookback_start="2025-12-15", portfolio=_portfolio(), signal_prices={})
+    summary = ctx.token_summary()
+    assert summary["bundle_write_failures"] == 1
 
 
 # ---------------------------------------------------------------------------
