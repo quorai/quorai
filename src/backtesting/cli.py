@@ -29,7 +29,9 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
     date_group = parser.add_mutually_exclusive_group()
     date_group.add_argument(
+        "--calendar-days",
         "--days",
+        dest="days",
         type=int,
         default=30,
         help="Number of calendar days to look back from end-date (default: 30)",
@@ -88,6 +90,16 @@ def _main_run(argv: list[str]) -> int:
     np.random.seed(args.seed)
 
     start_date, end_date = _resolve_dates(args)
+
+    import logging
+
+    import pandas as pd
+    _trading_days = len(pd.date_range(start_date, end_date, freq="B"))
+    logging.getLogger(__name__).info(
+        "Backtest window: %s → %s (%d calendar days, ~%d trading days)",
+        start_date, end_date, args.days, _trading_days,
+    )
+
     tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
     model_name, model_provider = _resolve_model(args)
     check_provider_api_key(model_provider)
