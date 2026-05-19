@@ -168,6 +168,24 @@ def test_available_buying_power_reflects_short_margin() -> None:
     assert p.available_buying_power() == pytest.approx(10_000.0 + 5_000.0 - margin_amount)
 
 
+def test_cost_basis_zero_after_full_sell() -> None:
+    p = Portfolio(tickers=["AAPL"], initial_cash=10_000.0, margin_requirement=0.0)
+    p.apply_long_buy("AAPL", 10, 100.0)
+    p.apply_long_sell("AAPL", 10, 110.0)
+    snap = p.get_snapshot()
+    assert snap["positions"]["AAPL"]["long"] == 0.0
+    assert snap["positions"]["AAPL"]["long_cost_basis"] == 0.0
+
+
+def test_cost_basis_no_drift_after_many_fractional_buys() -> None:
+    p = Portfolio(tickers=["AAPL"], initial_cash=10_000.0, margin_requirement=0.0)
+    for _ in range(10):
+        p.apply_long_buy("AAPL", 0.1, 100.0)
+    snap = p.get_snapshot()
+    assert snap["positions"]["AAPL"]["long"] == pytest.approx(1.0, abs=1e-9)
+    assert snap["positions"]["AAPL"]["long_cost_basis"] == pytest.approx(100.0, abs=1e-6)
+
+
 @pytest.mark.parametrize("action", [("buy"), ("sell"), ("short"), ("cover")])
 def test_zero_or_negative_quantity_is_noop(portfolio: Portfolio, action: str) -> None:
     before = portfolio.get_snapshot()

@@ -92,6 +92,9 @@ class Portfolio:
                 total_new_cost = cost
                 position["long_cost_basis"] = (total_old_cost + total_new_cost) / total_shares
             position["long"] = old_shares + quantity
+            if math.isclose(position["long"], 0.0, abs_tol=1e-9):
+                position["long"] = 0.0
+                position["long_cost_basis"] = 0.0
             self._portfolio["cash"] -= cost
             return quantity
         max_quantity = self.available_buying_power() / price if price > 0 else 0
@@ -105,6 +108,9 @@ class Portfolio:
                 total_new_cost = cost
                 position["long_cost_basis"] = (total_old_cost + total_new_cost) / total_shares
             position["long"] = old_shares + max_quantity
+            if math.isclose(position["long"], 0.0, abs_tol=1e-9):
+                position["long"] = 0.0
+                position["long_cost_basis"] = 0.0
             self._portfolio["cash"] -= cost
             return max_quantity
         return 0
@@ -147,6 +153,9 @@ class Portfolio:
                 total_new_cost = price * quantity
                 position["short_cost_basis"] = (total_old_cost + total_new_cost) / total_shares
             position["short"] = old_short_shares + quantity
+            if math.isclose(position["short"], 0.0, abs_tol=1e-9):
+                position["short"] = 0.0
+                position["short_cost_basis"] = 0.0
             position["short_margin_used"] += margin_required
             self._portfolio["margin_used"] += margin_required
             self._portfolio["cash"] += proceeds
@@ -164,6 +173,9 @@ class Portfolio:
                 total_new_cost = price * max_quantity
                 position["short_cost_basis"] = (total_old_cost + total_new_cost) / total_shares
             position["short"] = old_short_shares + max_quantity
+            if math.isclose(position["short"], 0.0, abs_tol=1e-9):
+                position["short"] = 0.0
+                position["short_cost_basis"] = 0.0
             position["short_margin_used"] += margin_required
             self._portfolio["margin_used"] += margin_required
             self._portfolio["cash"] += proceeds
