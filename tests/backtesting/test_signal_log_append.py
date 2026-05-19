@@ -1,5 +1,7 @@
 """Tests that SignalLogger appends rather than truncates on re-open."""
 
+from unittest.mock import patch
+
 from src.backtesting.signal_log import SignalLogger
 
 
@@ -22,3 +24,15 @@ def test_second_open_appends_not_truncates(tmp_path):
 
     assert json.loads(lines[0])["date"] == "2024-01-01"
     assert json.loads(lines[1])["date"] == "2024-01-02"
+
+
+def test_fsync_called_after_log_day(tmp_path):
+    signals = {"agent_a": {"AAPL": {"signal": "bullish", "confidence": 0.8}}}
+    prices = {"AAPL": 150.0}
+
+    with patch("os.fsync") as mock_fsync:
+        logger = SignalLogger(run_id="fsync-test", log_dir=str(tmp_path))
+        logger.log_day("2024-01-01", signals, prices)
+        logger.close()
+
+    mock_fsync.assert_called_once()

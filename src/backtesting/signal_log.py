@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from src.backtesting.types import AgentSignals
@@ -36,6 +37,7 @@ class SignalLogger:
                 }
                 self._file.write(json.dumps(record) + "\n")
         self._file.flush()
+        os.fsync(self._file.fileno())
 
     def close(self) -> None:
         self._file.close()
