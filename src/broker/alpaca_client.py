@@ -1,5 +1,6 @@
 from datetime import date, datetime
 import logging
+import random
 import time
 from typing import cast
 
@@ -47,13 +48,14 @@ def _retry_api_call(fn, *args, **kwargs):
             last_exc = exc
         if attempt < 3:
             delay = _RETRY_DELAYS[attempt - 1]
+            jittered = delay * (1 + random.uniform(0.0, 0.3))
             logger.warning(
-                "Alpaca request failed (attempt %d/3), retrying in %.1fs: %s",
+                "Alpaca request failed (attempt %d/3), retrying in %.2fs: %s",
                 attempt,
-                delay,
+                jittered,
                 last_exc,
             )
-            time.sleep(delay)
+            time.sleep(jittered)
     assert last_exc is not None
     raise last_exc
 
