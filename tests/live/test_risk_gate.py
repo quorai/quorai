@@ -188,3 +188,27 @@ def test_backward_compat_no_position_args(tmp_path):
     allowed, reason = _check(gate, action="sell", side="sell", qty=100.0, price=300.0)
     assert allowed is False
     assert reason == "notional_exceeded"
+
+
+# --- Missing / zero price guard (RV-01) ---
+
+def test_rejects_when_price_is_zero(tmp_path):
+    gate = _make_gate(tmp_path)
+    allowed, reason = _check(gate, price=0.0)
+    assert allowed is False
+    assert reason == "missing_price"
+
+
+def test_rejects_when_price_is_negative(tmp_path):
+    gate = _make_gate(tmp_path)
+    allowed, reason = _check(gate, price=-1.0)
+    assert allowed is False
+    assert reason == "missing_price"
+
+
+def test_missing_price_rejected_before_notional(tmp_path):
+    """Zero price must be caught before the notional calculation (which would pass at 0 * qty = 0)."""
+    gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=1.0)
+    allowed, reason = _check(gate, qty=1_000_000.0, price=0.0)
+    assert allowed is False
+    assert reason == "missing_price"

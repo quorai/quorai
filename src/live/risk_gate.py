@@ -61,6 +61,8 @@ class RiskGate:
         s = self._settings
         if s.KILL_SWITCH:
             return "kill_switch_active"
+        if price <= 0:
+            return "missing_price"
         # Closing trades reduce exposure and bypass the notional cap.
         # Only the portion that opens new exposure (e.g. a sell that exceeds the long) is capped.
         if action == "sell":

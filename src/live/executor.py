@@ -149,6 +149,8 @@ class LiveExecutor:
             # Risk gate check
             if self._risk_gate and not dry_run:
                 price = prices.get(ticker, 0.0)
+                if price <= 0:
+                    logger.warning("[executor] no price for %s, risk gate will reject", ticker)
                 allowed, reason = self._risk_gate.check(
                     ticker=ticker,
                     action=action,

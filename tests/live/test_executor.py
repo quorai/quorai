@@ -273,8 +273,8 @@ def test_client_order_id_uses_ny_date(tmp_path):
 
 def test_client_order_id_sell_vs_short_are_distinct():
     """sell and short both map to side='sell' but must have different client_order_ids."""
-    from unittest.mock import patch
     from datetime import datetime
+    from unittest.mock import patch
     from zoneinfo import ZoneInfo
 
     ny_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
@@ -297,8 +297,8 @@ def test_client_order_id_sell_vs_short_are_distinct():
 
 def test_client_order_id_buy_vs_cover_are_distinct():
     """buy and cover both map to side='buy' but must have different client_order_ids."""
-    from unittest.mock import patch
     from datetime import datetime
+    from unittest.mock import patch
     from zoneinfo import ZoneInfo
 
     ny_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
@@ -318,3 +318,32 @@ def test_client_order_id_buy_vs_cover_are_distinct():
     assert id_buy != id_cover, f"buy and cover produced same id: {id_buy}"
     assert id_buy.endswith("-buy"), id_buy
     assert id_cover.endswith("-cover"), id_cover
+
+
+def test_missing_price_rejected_by_risk_gate(tmp_path):
+    """RV-01: missing price in current_prices causes risk gate to reject the order."""
+    from src.config import Settings
+    from src.live.audit_journal import AuditJournal
+    from src.live.risk_gate import RiskGate
+
+    settings = Settings(
+        ALPACA_API_KEY="x",
+        ALPACA_SECRET_KEY="x",
+        MAX_ORDER_NOTIONAL=10_000.0,
+        MAX_ORDER_QTY=1_000.0,
+        DAILY_LOSS_LIMIT_PCT=0.05,
+        KILL_SWITCH=False,
+    )
+    journal = AuditJournal(log_dir=str(tmp_path))
+    risk_gate = RiskGate(settings=settings, journal=journal)
+    broker = _make_broker()
+    executor = LiveExecutor(broker=broker, risk_gate=risk_gate, sod_equity=100_000.0)
+
+    results = executor.execute_decisions(
+        {"AAPL": {"action": "buy", "quantity": 5.0}},
+        current_prices={},  # no price for AAPL
+    )
+
+    assert "rejected" in results["AAPL"]
+    assert "missing_price" in results["AAPL"]
+    broker.submit_order.assert_not_called()
