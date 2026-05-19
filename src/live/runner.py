@@ -114,7 +114,16 @@ class LiveRunner:
                 save_sod_equity(sod, allow_intraday=True)
                 logger.info("[runner] catch-up: SOD equity backfilled from broker history: %.2f", sod)
             else:
-                save_sod_equity(account_equity)
+                now = now_ny()
+                market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+                if now < market_open:
+                    save_sod_equity(account_equity)
+                else:
+                    logger.warning(
+                        "[runner] No SOD equity found post-open; using current equity=%.2f as baseline",
+                        account_equity,
+                    )
+                    save_sod_equity(account_equity, allow_intraday=True)
                 sod = account_equity
         self._sod_equity = sod
 

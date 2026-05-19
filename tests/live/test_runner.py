@@ -1,6 +1,12 @@
+from datetime import datetime
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from src.live.runner import LiveRunner
+
+_NY = ZoneInfo("America/New_York")
+_PRE_OPEN = datetime(2024, 1, 15, 8, 0, 0, tzinfo=_NY)
+_POST_OPEN = datetime(2024, 1, 15, 10, 0, 0, tzinfo=_NY)
 
 
 def _make_broker(equity=100_000.0):
@@ -52,7 +58,9 @@ def test_prepare_calls_to_snapshot_and_run_cycle(mock_pipeline_cls, mock_to_snap
 
     runner = _make_runner(broker)
 
-    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save:
+    with patch("src.live.runner.load_sod_equity", return_value=None), \
+         patch("src.live.runner.save_sod_equity") as mock_save, \
+         patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
         decisions, snapshot = runner.prepare()
 
     mock_to_snapshot.assert_called_once()
@@ -70,7 +78,9 @@ def test_sod_equity_saved_on_first_run(mock_pipeline_cls, mock_to_snapshot):
 
     runner = _make_runner(broker)
 
-    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save:
+    with patch("src.live.runner.load_sod_equity", return_value=None), \
+         patch("src.live.runner.save_sod_equity") as mock_save, \
+         patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
         runner.prepare()
 
     mock_save.assert_called_once_with(95_000.0)
@@ -128,3 +138,22 @@ def test_catch_up_fetches_sod_from_broker_history(mock_pipeline_cls, mock_to_sna
     broker.get_sod_equity.assert_called_once()
     mock_save.assert_called_once_with(100_000.0, allow_intraday=True)
     assert runner._sod_equity == 100_000.0
+
+
+@patch("src.live.runner.to_snapshot")
+@patch("src.live.runner.PipelineContext")
+def test_prepare_post_open_falls_back_gracefully(mock_pipeline_cls, mock_to_snapshot):
+    """RV-08: No SOD file + post-open time → saves with allow_intraday=True instead of raising."""
+    broker = _make_broker(equity=92_000.0)
+    mock_to_snapshot.return_value = _make_snapshot()
+    mock_pipeline_cls.build.return_value = _make_ctx(decisions={})
+
+    runner = _make_runner(broker)
+
+    with patch("src.live.runner.load_sod_equity", return_value=None), \
+         patch("src.live.runner.save_sod_equity") as mock_save, \
+         patch("src.live.runner.now_ny", return_value=_POST_OPEN):
+        runner.prepare()
+
+    mock_save.assert_called_once_with(92_000.0, allow_intraday=True)
+    assert runner._sod_equity == 92_000.0
