@@ -46,6 +46,9 @@ class AuditJournal:
         with self._lock:
             with open(self._log_path(), "a") as f:
                 f.write(json.dumps(entry) + "\n")
+                if status in {"pending", "submitted"}:
+                    f.flush()
+                    os.fsync(f.fileno())
         logger.debug("[journal] %s", entry)
 
     def record_reconciliation(
@@ -74,8 +77,8 @@ class AuditJournal:
                 f.write(json.dumps(entry) + "\n")
         logger.debug("[journal] reconciled %s", entry)
 
-    def list_submitted_today(self) -> list[dict]:
-        """Return today's journal entries with status == 'submitted'. Returns [] if no file."""
+    def list_all_today(self) -> list[dict]:
+        """Return all of today's journal entries regardless of status. Returns [] if no file."""
         path = self._log_path()
         if not os.path.exists(path):
             return []
@@ -91,9 +94,12 @@ class AuditJournal:
                     except json.JSONDecodeError:
                         logger.warning("[journal] skipping malformed line: %.80s", line)
                         continue
-                    if entry.get("status") == "submitted":
-                        entries.append(entry)
+                    entries.append(entry)
         return entries
+
+    def list_submitted_today(self) -> list[dict]:
+        """Return today's journal entries with status == 'submitted'. Returns [] if no file."""
+        return [e for e in self.list_all_today() if e.get("status") == "submitted"]
 
     def has_submitted_today(self) -> bool:
         """True if list_submitted_today() is non-empty."""

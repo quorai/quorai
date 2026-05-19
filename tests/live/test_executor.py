@@ -3,12 +3,14 @@ from unittest.mock import MagicMock
 from src.live.executor import LiveExecutor
 
 
-def _make_order(symbol: str, side_value: str) -> MagicMock:
+def _make_order(symbol: str, side_value: str, action: str | None = None) -> MagicMock:
     order = MagicMock()
     order.symbol = symbol
     order.side = MagicMock()
     order.side.value = side_value
     order.id = "order-123"
+    # client_order_id format mirrors executor: YYYY-MM-DD-{TICKER}-{action}
+    order.client_order_id = f"2024-01-15-{symbol}-{action or side_value}"
     return order
 
 
@@ -349,6 +351,37 @@ def test_missing_price_rejected_by_risk_gate(tmp_path):
     broker.submit_order.assert_not_called()
 
 
+def test_pending_sell_does_not_suppress_short():
+    """RV-03: a pending sell order must not suppress a new short on the same ticker."""
+    existing = _make_order("AAPL", "sell", action="sell")
+    broker = _make_broker(open_orders=[existing])
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "short", "quantity": 3.0}})
+    assert results["AAPL"] == "submitted"
+    broker.submit_order.assert_called_once()
+
+
+def test_pending_short_does_not_suppress_sell():
+    """RV-03: a pending short order must not suppress a new sell on the same ticker."""
+    pos = _make_position("AAPL", "10")
+    existing = _make_order("AAPL", "sell", action="short")
+    broker = _make_broker(open_orders=[existing], positions=[pos])
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "sell", "quantity": 3.0}})
+    assert results["AAPL"] == "submitted"
+    broker.submit_order.assert_called_once()
+
+
+def test_pending_buy_still_suppresses_duplicate_buy():
+    """RV-03: dedup still works for the same action — a pending buy blocks another buy."""
+    existing = _make_order("AAPL", "buy", action="buy")
+    broker = _make_broker(open_orders=[existing])
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 5.0}})
+    assert results["AAPL"] == "skipped (open order exists)"
+    broker.submit_order.assert_not_called()
+
+
 def test_execute_decisions_checks_kill_switch_directly(tmp_path, monkeypatch):
     """RV-02: execute_decisions blocks orders when kill switch is toggled after construction."""
     from unittest.mock import MagicMock
@@ -391,3 +424,103 @@ def test_execute_decisions_checks_kill_switch_directly(tmp_path, monkeypatch):
 
     assert results["AAPL"] == "rejected: kill_switch_active"
     broker.submit_order.assert_not_called()
+
+
+def _make_override_executor(tmp_path):
+    """Helper: executor wired with a journal and an override-approved idempotency guard."""
+    journal = __import__("src.live.audit_journal", fromlist=["AuditJournal"]).AuditJournal(log_dir=str(tmp_path))
+    broker = _make_broker()
+    guard = MagicMock()
+    guard.check.return_value = (True, "override_approved")
+    executor = LiveExecutor(broker=broker, idempotency_guard=guard, journal=journal)
+    return executor, broker, journal
+
+
+def test_override_suffix_skips_error_entries(tmp_path, monkeypatch):
+    """RV-05: a prior -r1 entry with status=error must cause the new order to use -r2."""
+    from datetime import datetime
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    ny_tz = ZoneInfo("America/New_York")
+    fixed_now = datetime(2024, 1, 15, 10, 0, tzinfo=ny_tz)
+
+    with patch("src.live.executor.now_ny", return_value=fixed_now), \
+         patch("src.live.audit_journal.now_ny", return_value=fixed_now):
+        executor, broker, journal = _make_override_executor(tmp_path)
+
+        # Pre-populate journal: prior attempt ended with error
+        journal.record(
+            ticker="AAPL",
+            action="buy",
+            qty=5.0,
+            side="buy",
+            status="error",
+            order_id="2024-01-15-AAPL-buy-r1",
+        )
+
+        executor.execute_decisions(
+            {"AAPL": {"action": "buy", "quantity": 5.0}},
+            current_prices={"AAPL": 150.0},
+        )
+
+    order_id = broker.submit_order.call_args.kwargs["client_order_id"]
+    assert order_id == "2024-01-15-AAPL-buy-r2", f"Expected -r2, got: {order_id}"
+
+
+def test_negative_qty_skipped():
+    """RV-06: negative quantity is rejected before reaching the broker."""
+    broker = _make_broker()
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": -5}})
+    assert "skipped" in results["AAPL"]
+    broker.submit_order.assert_not_called()
+
+
+def test_nan_qty_skipped():
+    """RV-06: NaN quantity is rejected before reaching the broker."""
+    broker = _make_broker()
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": float("nan")}})
+    assert "skipped" in results["AAPL"]
+    broker.submit_order.assert_not_called()
+
+
+def test_inf_qty_skipped():
+    """RV-06: infinite quantity is rejected before reaching the broker."""
+    broker = _make_broker()
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions({"AAPL": {"action": "buy", "quantity": float("inf")}})
+    assert "skipped" in results["AAPL"]
+    broker.submit_order.assert_not_called()
+
+
+def test_override_suffix_skips_rejected_entries(tmp_path, monkeypatch):
+    """RV-05: a prior -r1 entry with status=rejected must cause the new order to use -r2."""
+    from datetime import datetime
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    ny_tz = ZoneInfo("America/New_York")
+    fixed_now = datetime(2024, 1, 15, 10, 0, tzinfo=ny_tz)
+
+    with patch("src.live.executor.now_ny", return_value=fixed_now), \
+         patch("src.live.audit_journal.now_ny", return_value=fixed_now):
+        executor, broker, journal = _make_override_executor(tmp_path)
+
+        journal.record(
+            ticker="AAPL",
+            action="buy",
+            qty=5.0,
+            side="buy",
+            status="rejected",
+            order_id="2024-01-15-AAPL-buy-r1",
+        )
+
+        executor.execute_decisions(
+            {"AAPL": {"action": "buy", "quantity": 5.0}},
+            current_prices={"AAPL": 150.0},
+        )
+
+    order_id = broker.submit_order.call_args.kwargs["client_order_id"]
+    assert order_id == "2024-01-15-AAPL-buy-r2", f"Expected -r2, got: {order_id}"

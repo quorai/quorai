@@ -62,11 +62,17 @@ class LiveExecutor:
                 return {ticker: f"skipped (idempotency: {reason})" for ticker in decisions}
             is_override_run = reason == "override_approved"
 
+        # Keyed by (symbol, action) — not (symbol, side) — because both "sell" and "short"
+        # map to Alpaca side="sell", which would cause a pending sell to suppress a short.
+        # Action is recovered from client_order_id (format: YYYY-MM-DD-{TICKER}-{action}[-r{N}]).
+        # If the format changes, this parsing must be updated to match.
         pending: set[tuple[str, str]] = set()
         if not dry_run:
             for order in self._broker.get_open_orders():
-                if order.symbol is not None and order.side is not None:
-                    pending.add((order.symbol, order.side.value))
+                if order.symbol and order.client_order_id:
+                    parts = order.client_order_id.split("-")
+                    if len(parts) >= 5:
+                        pending.add((order.symbol, parts[4]))
 
         # Pre-fetch positions for risk-gate closing-trade exemption + cover qty clamping.
         current_longs: dict[str, float] = {}
@@ -89,6 +95,11 @@ class LiveExecutor:
         for ticker, decision in decisions.items():
             action = decision.get("action", "hold")
             qty = round(float(decision.get("quantity", 0)), 3)
+
+            if not math.isfinite(qty) or qty < 0:
+                logger.warning("[executor] %s invalid qty=%.3f, skipping", ticker, qty)
+                results[ticker] = f"skipped (invalid qty: {qty})"
+                continue
 
             if action == "hold" or qty == 0:
                 results[ticker] = "skipped"
@@ -144,8 +155,8 @@ class LiveExecutor:
                 results[ticker] = f"error: unknown action '{action}'"
                 continue
 
-            if (ticker, side) in pending:
-                logger.warning("[executor] %s already has an open %s order, skipping", ticker, side)
+            if (ticker, action) in pending:
+                logger.warning("[executor] %s already has an open %s order, skipping", ticker, action)
                 results[ticker] = "skipped (open order exists)"
                 continue
 
@@ -183,12 +194,10 @@ class LiveExecutor:
             # the new order while still being idempotent within that re-run.
             date_prefix = now_ny().strftime("%Y-%m-%d")
             if is_override_run and self._journal:
-                prior_count = sum(
-                    1
-                    for e in self._journal.list_submitted_today()
-                    if e.get("ticker") == ticker and e.get("action") == action
-                )
-                client_order_id = f"{date_prefix}-{ticker}-{action}-r{prior_count + 1}"
+                prefix = f"{date_prefix}-{ticker}-{action}-r"
+                used_indices = [int(e["order_id"].split("-r")[-1]) for e in self._journal.list_all_today() if e.get("order_id", "").startswith(prefix)]
+                next_index = (max(used_indices) + 1) if used_indices else 1
+                client_order_id = f"{date_prefix}-{ticker}-{action}-r{next_index}"
             else:
                 client_order_id = f"{date_prefix}-{ticker}-{action}"
 

@@ -2,6 +2,7 @@ from datetime import date
 import json
 import os
 import tempfile
+from unittest.mock import patch
 
 from src.live.audit_journal import AuditJournal
 
@@ -88,3 +89,17 @@ def test_has_submitted_today(tmp_path):
     assert journal.has_submitted_today()
     journal.record(ticker="MSFT", action="sell", qty=2.0, side="sell", status="rejected")
     assert journal.has_submitted_today()
+
+
+def test_fsync_called_for_submitted_status(tmp_path):
+    journal = AuditJournal(log_dir=str(tmp_path))
+    with patch("os.fsync") as mock_fsync:
+        journal.record(ticker="AAPL", action="buy", qty=1.0, side="buy", status="submitted")
+    mock_fsync.assert_called_once()
+
+
+def test_fsync_not_called_for_skipped_status(tmp_path):
+    journal = AuditJournal(log_dir=str(tmp_path))
+    with patch("os.fsync") as mock_fsync:
+        journal.record(ticker="AAPL", action="buy", qty=1.0, side="buy", status="skipped")
+    mock_fsync.assert_not_called()
