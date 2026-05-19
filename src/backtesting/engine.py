@@ -61,6 +61,7 @@ class BacktestEngine:
         use_conviction_weights: bool = False,
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
+        run_label: str = "",
     ) -> None:
         self._agent = agent
         self._tickers = tickers
@@ -70,12 +71,13 @@ class BacktestEngine:
         self._model_name = model_name
         self._model_provider = model_provider
         self._selected_analysts = selected_analysts
-        self._llm_temperature = llm_temperature
+        self._llm_temperature = llm_temperature if llm_temperature is not None else 0.0
         self._show_reasoning = show_reasoning
         self._use_regime_selection = use_regime_selection
         self._use_conviction_weights = use_conviction_weights
         self._request = request
         self._risk_profile = risk_profile
+        self._run_label = run_label
 
         self._portfolio = Portfolio(
             tickers=tickers,
@@ -165,13 +167,18 @@ class BacktestEngine:
     def get_signal_log_path(self) -> str | None:
         return self._signal_log_path
 
+    @property
+    def run_id(self) -> str:
+        base = f"{'-'.join(self._tickers)}-{self._start_date}-{self._end_date}"
+        return f"{base}-{self._run_label}" if self._run_label else base
+
     def run_backtest(self) -> PerformanceMetrics:
         if self._risk_profile is not None:
             logger.info("Risk profile: %s (base_limit=%.2f, notional_cap=$%.0f)", self._risk_profile.name, self._risk_profile.base_limit, self._risk_profile.max_order_notional)
 
         self._prefetch_data()
 
-        run_id = f"{'-'.join(self._tickers)}-{self._start_date}-{self._end_date}"
+        run_id = self.run_id
 
         dates = pd.date_range(self._start_date, self._end_date, freq="B")
         if len(dates) > 0:
@@ -274,6 +281,13 @@ class BacktestEngine:
                         qty = d.get("quantity", 0)
                         executed_qty = self._executor.execute_trade(ticker, action, qty, fill_prices[ticker], self._portfolio)
                         executed_trades[ticker] = executed_qty
+
+                    ctx.finalize_cycle(
+                        date=current_date_str,
+                        fill_prices=fill_prices,
+                        executed_trades=executed_trades,
+                        portfolio_after=self._portfolio,
+                    )
 
                     point: PortfolioValuePoint = {
                         "Date": current_date,

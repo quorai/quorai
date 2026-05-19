@@ -1,6 +1,44 @@
-"""Tests for R30: backtest engine per-cycle lookback must cover 12 months."""
+"""Tests for BacktestEngine structural invariants."""
 
 import inspect
+from unittest.mock import MagicMock
+
+
+class TestDefaultTemperature:
+    def test_default_temperature_is_zero_for_backtest(self):
+        """BacktestEngine must default llm_temperature to 0.0 for reproducibility."""
+        from src.backtesting.engine import BacktestEngine
+
+        engine = BacktestEngine(
+            agent=MagicMock(),
+            tickers=["AAPL"],
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            initial_capital=100_000.0,
+            model_name="test-model",
+            model_provider="test-provider",
+            selected_analysts=None,
+            initial_margin_requirement=0.0,
+        )
+        assert engine._llm_temperature == 0.0
+
+    def test_explicit_temperature_is_preserved(self):
+        """When llm_temperature is provided explicitly it must not be overridden."""
+        from src.backtesting.engine import BacktestEngine
+
+        engine = BacktestEngine(
+            agent=MagicMock(),
+            tickers=["AAPL"],
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            initial_capital=100_000.0,
+            model_name="test-model",
+            model_provider="test-provider",
+            selected_analysts=None,
+            initial_margin_requirement=0.0,
+            llm_temperature=0.7,
+        )
+        assert engine._llm_temperature == 0.7
 
 
 class TestEngineLookback:

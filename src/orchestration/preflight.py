@@ -97,6 +97,11 @@ class PipelineContext:
                 spy_df=spy_df,
             )
         summary = ctx.token_summary()
+
+    ``llm_temperature=None`` is valid for live mode and passes the provider's
+    default through to the LLM. Backtest callers are responsible for seeding
+    determinism (e.g. default to 0.0 in BacktestEngine and seeding Python/NumPy
+    RNGs in the CLI) — PipelineContext itself makes no reproducibility guarantee.
     """
 
     def __init__(
@@ -140,6 +145,7 @@ class PipelineContext:
         self._started_at = _utcnow_iso()
         self._cycle_dates: list[str] = []
         self._cycle_files: list[str] = []
+        self._last_cycle_path: Path | None = None
 
     @classmethod
     def build(
@@ -334,6 +340,7 @@ class PipelineContext:
             cycles_dir = Path(self._log_dir) / "cycles" / self._run_id
             bundle_path = cycles_dir / f"cycle-{date}.json"
             _atomic_json_write(bundle_path, bundle)
+            self._last_cycle_path = bundle_path
 
             rel_path = str(bundle_path)
             self._cycle_dates.append(date)
@@ -341,6 +348,27 @@ class PipelineContext:
             self._write_run_manifest("running")
         except Exception:
             logger.exception("Failed to write cycle bundle for run=%s date=%s", self._run_id, date)
+
+    def finalize_cycle(
+        self,
+        *,
+        date: str,
+        fill_prices: dict[str, float],
+        executed_trades: dict[str, float],
+        portfolio_after: "Portfolio | PortfolioSnapshot",
+    ) -> None:
+        cycle_path = Path(self._log_dir) / "cycles" / self._run_id / f"cycle-{date}.json"
+        if not cycle_path.exists():
+            return
+        try:
+            with open(cycle_path, encoding="utf-8") as fh:
+                bundle = json.load(fh)
+            bundle["fill_prices"] = fill_prices
+            bundle["trades"] = executed_trades
+            bundle["portfolio_after"] = _portfolio_to_dict(portfolio_after)
+            _atomic_json_write(cycle_path, bundle)
+        except Exception:
+            logger.exception("Failed to finalize cycle bundle for run=%s date=%s", self._run_id, date)
 
     def _write_run_manifest(self, status: str) -> None:
         try:

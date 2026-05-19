@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any
 
@@ -41,6 +42,7 @@ def run_comparison(configs: list[RunConfig], output_dir: str = "logs") -> list[R
     for cfg in configs:
         start = time.monotonic()
 
+        slug = re.sub(r"[^a-z0-9]+", "-", cfg.label.lower()).strip("-")
         engine = BacktestEngine(
             agent=run_quorai,
             tickers=cfg.tickers,
@@ -53,6 +55,7 @@ def run_comparison(configs: list[RunConfig], output_dir: str = "logs") -> list[R
             initial_margin_requirement=cfg.initial_margin_requirement,
             use_regime_selection=cfg.use_regime_selection,
             use_conviction_weights=cfg.use_conviction_weights,
+            run_label=slug,
         )
         metrics = engine.run_backtest()
         pv = engine.get_portfolio_values()

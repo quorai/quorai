@@ -128,9 +128,7 @@ def test_sell_side_maps_correctly():
 def test_retry_uses_jitter():
     """RV-14: sleep is called with a value strictly greater than the base delay."""
     from unittest.mock import patch
-    from unittest.mock import MagicMock as _MM
 
-    from alpaca.common.exceptions import APIError
     from requests.exceptions import ConnectionError as _ConnErr
 
     client = _make_client()
@@ -138,8 +136,7 @@ def test_retry_uses_jitter():
     # Use ConnectionError (no property restrictions) to trigger retries
     client._client.get_account.side_effect = [_ConnErr("down"), _ConnErr("down"), _ConnErr("down")]
 
-    with patch("src.broker.alpaca_client.random.uniform", return_value=0.2), \
-         patch("src.broker.alpaca_client.time.sleep") as mock_sleep:
+    with patch("src.broker.alpaca_client.random.uniform", return_value=0.2), patch("src.broker.alpaca_client.time.sleep") as mock_sleep:
         try:
             client.get_account()
         except Exception:

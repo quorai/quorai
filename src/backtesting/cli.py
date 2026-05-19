@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta
+import random
 import sys
 
 from colorama import Fore, Style, init
@@ -54,6 +55,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--use-regime-selection", action="store_true", dest="use_regime_selection", help="Narrow analyst set by daily SPY regime")
     parser.add_argument("--use-conviction-weights", action="store_true", dest="use_conviction_weights", help="Weight agents by rolling hit-rate (requires weights.json)")
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility (default: 42)")
     add_risk_profile_arg(parser)
 
 
@@ -79,6 +81,11 @@ def _main_run(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run a single backtest")
     _add_common_args(parser)
     args = parser.parse_args(argv)
+
+    import numpy as np
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
 
     start_date, end_date = _resolve_dates(args)
     tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
@@ -135,6 +142,11 @@ def _main_compare(argv: list[str]) -> int:
         help="Which comparison to run: regime, weights, or both (default: both)",
     )
     args = parser.parse_args(argv)
+
+    import numpy as np
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
 
     start_date, end_date = _resolve_dates(args)
     tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
