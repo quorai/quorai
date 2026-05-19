@@ -317,10 +317,9 @@ class BacktestEngine:
                     self._table_rows.extend(rows)
                     self._results.print_rows(rows)
 
-                    if len(self._portfolio_values) > 3:
-                        computed = self._perf.compute_metrics(self._portfolio_values)
-                        if computed:
-                            self._performance_metrics.update(computed)
+                computed = self._perf.compute_metrics(self._portfolio_values)
+                if computed:
+                    self._performance_metrics.update(computed)
 
                 self._token_summary_data = ctx.token_summary()
         finally:

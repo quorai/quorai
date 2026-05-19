@@ -138,3 +138,60 @@ def test_partial_ticker_data_still_runs_day():
 
     # An equity-curve point must have been produced for each date
     assert len(engine.get_portfolio_values()) == len(trading_dates)
+
+
+def test_compute_metrics_called_once():
+    """compute_metrics must be called exactly once after the date loop, not per-day."""
+    from src.backtesting.engine import BacktestEngine
+
+    trading_dates = pd.DatetimeIndex(["2025-01-07", "2025-01-08", "2025-01-09"])
+    price_df = pd.DataFrame(
+        {"close": [100.0, 101.0, 102.0], "open": [99.0, 100.0, 101.0]},
+        index=trading_dates,
+    )
+
+    engine = BacktestEngine(
+        agent=MagicMock(),
+        tickers=["AAPL"],
+        start_date="2025-01-07",
+        end_date="2025-01-09",
+        initial_capital=100_000.0,
+        model_name="test-model",
+        model_provider="test-provider",
+        selected_analysts=None,
+        initial_margin_requirement=0.0,
+    )
+    engine._results = MagicMock()
+    engine._results.build_day_rows.return_value = []
+    engine._benchmark = MagicMock()
+    engine._benchmark.get_return_pct.return_value = 0.0
+    engine._executor = MagicMock()
+    engine._executor.execute_trade.return_value = 0
+    engine._perf = MagicMock()
+    engine._perf.compute_metrics.return_value = None
+
+    mock_ctx = MagicMock()
+    mock_ctx.signal_log_path = None
+    mock_ctx.run_cycle.return_value = {"decisions": {}}
+    mock_ctx.token_summary.return_value = {}
+
+    @contextmanager
+    def _mock_build(**kwargs):
+        yield mock_ctx
+
+    def _fake_prefetch(self_engine):
+        self_engine._prefetched_prices = {"AAPL": price_df}
+        self_engine._spy_prices = pd.DataFrame()
+
+    with (
+        patch.object(BacktestEngine, "_prefetch_data", _fake_prefetch),
+        patch("src.backtesting.engine.PipelineContext.build", _mock_build),
+        patch("src.backtesting.engine.get_backtest_store"),
+        patch("src.backtesting.engine.progress"),
+    ):
+        engine.run_backtest()
+
+    assert engine._perf.compute_metrics.call_count == 1, (
+        f"compute_metrics called {engine._perf.compute_metrics.call_count} times "
+        f"(expected 1 — should be outside the date loop)"
+    )
