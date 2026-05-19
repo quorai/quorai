@@ -122,7 +122,11 @@ class BacktestEngine:
         for ticker in self._tickers:
             logger.info("Prefetching data for %s", ticker)
 
-            # Prices (full year window; also used by the day-loop valuation slice)
+            # Prices (full year window; also used by the day-loop valuation slice).
+            # yfinance fetches with auto_adjust=True (see api.py:get_prices), so all
+            # prices are already split/dividend-adjusted.  Portfolio share counts track
+            # unadjusted quantities; because the adjustment is baked into the price
+            # series rather than the share count, no per-position correction is needed.
             prices = get_prices(ticker, price_start_str, self._end_date)
             self._prefetched_prices[ticker] = prices_to_df(prices)
 
@@ -180,7 +184,16 @@ class BacktestEngine:
 
         run_id = self.run_id
 
-        dates = pd.date_range(self._start_date, self._end_date, freq="B")
+        valid_trading_days: set[pd.Timestamp] = set()
+        for df in self._prefetched_prices.values():
+            valid_trading_days.update(df.index)
+
+        business_days = pd.date_range(self._start_date, self._end_date, freq="B")
+        if valid_trading_days:
+            dates = [d for d in business_days if d in valid_trading_days]
+        else:
+            logger.warning("No prefetched price data found; falling back to business-day calendar")
+            dates = list(business_days)
         self._portfolio_values = []
 
         try:

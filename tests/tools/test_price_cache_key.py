@@ -76,3 +76,26 @@ def test_wider_range_re_downloads_missing_tail():
         get_prices("AAPL", "2024-01-01", "2024-03-31")
 
     assert fetched_from_yf[0], "yfinance must be called when cached data is >5 days stale vs end_date"
+
+
+def test_get_prices_uses_auto_adjust():
+    """yfinance download must always be called with auto_adjust=True."""
+    import pandas as pd
+
+    captured_kwargs: dict = {}
+
+    def fake_download(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return pd.DataFrame()
+
+    with (
+        patch("src.tools.api.get_backtest_store") as mock_store,
+        patch("src.tools.api._cache", Cache(db_path=":memory:")),
+        patch("yfinance.download", side_effect=fake_download),
+    ):
+        mock_store.return_value.slice_prices.return_value = None
+        from src.tools.api import get_prices
+
+        get_prices("AAPL", "2024-01-01", "2024-01-31")
+
+    assert captured_kwargs.get("auto_adjust") is True, "auto_adjust must be True to get split-adjusted prices"
