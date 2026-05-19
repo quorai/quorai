@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 _BUY_ACTIONS = {"buy", "cover"}
 _SELL_ACTIONS = {"sell", "short"}
 
-_TERMINAL_STATUSES = {"filled", "canceled", "expired", "rejected", "done_for_day", "stopped", "suspended", "replaced"}
-
 
 class LiveExecutor:
     def __init__(
