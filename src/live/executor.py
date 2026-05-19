@@ -42,10 +42,13 @@ class LiveExecutor:
         decisions: AgentDecisions,
         dry_run: bool = False,
         current_prices: dict[str, float] | None = None,
+        abort_on_error: bool = True,
     ) -> dict[str, str]:
         """Execute decisions. Returns {ticker: "submitted"|"skipped"|"error: ..."}.
         If dry_run=True, logs what would be submitted but does not call the API.
-        Submitted broker order IDs are stored in self.submitted_orders after the call."""
+        Submitted broker order IDs are stored in self.submitted_orders after the call.
+        If abort_on_error=True (default), stops the batch after the first submission error
+        and sets results["batch_aborted"] = "1" so callers can detect an incomplete run."""
         results: dict[str, str] = {}
         prices = current_prices or {}
         self.submitted_orders = {}
@@ -258,5 +261,9 @@ class LiveExecutor:
                         reason=str(exc),
                     )
                 results[ticker] = f"error: {exc}"
+                if abort_on_error:
+                    logger.error("[executor] Aborting batch after error on %s", ticker)
+                    results["batch_aborted"] = "1"
+                    break
 
         return results

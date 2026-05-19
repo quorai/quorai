@@ -611,3 +611,41 @@ def test_override_journal_scanned_once(tmp_path):
             )
 
     assert mock_scan.call_count <= 1, f"list_all_today called {mock_scan.call_count} times; expected at most 1"
+
+
+def test_abort_on_error_stops_remaining_orders():
+    """RV-13: when abort_on_error=True, a submission error stops the batch immediately."""
+    broker = _make_broker()
+    broker.submit_order.side_effect = [RuntimeError("broker down"), MagicMock(id="order-2")]
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions(
+        {
+            "AAPL": {"action": "buy", "quantity": 1.0},
+            "MSFT": {"action": "buy", "quantity": 1.0},
+        },
+        abort_on_error=True,
+    )
+    assert "error" in results["AAPL"]
+    assert results.get("batch_aborted") == "1"
+    assert "MSFT" not in results  # second ticker never attempted
+    assert broker.submit_order.call_count == 1
+
+
+def test_no_abort_continues_on_error():
+    """RV-13: when abort_on_error=False, all tickers are attempted despite an error."""
+    broker = _make_broker()
+    ok_order = MagicMock()
+    ok_order.id = "order-2"
+    broker.submit_order.side_effect = [RuntimeError("broker down"), ok_order]
+    executor = LiveExecutor(broker=broker)
+    results = executor.execute_decisions(
+        {
+            "AAPL": {"action": "buy", "quantity": 1.0},
+            "MSFT": {"action": "buy", "quantity": 1.0},
+        },
+        abort_on_error=False,
+    )
+    assert "error" in results["AAPL"]
+    assert results["MSFT"] == "submitted"
+    assert "batch_aborted" not in results
+    assert broker.submit_order.call_count == 2

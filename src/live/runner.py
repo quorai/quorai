@@ -195,7 +195,12 @@ class LiveRunner:
             sod_equity=self._sod_equity,
             idempotency_guard=self._idempotency_guard,
         )
-        results = executor.execute_decisions(decisions, dry_run=self.dry_run, current_prices=self._signal_prices or None)
+        results = executor.execute_decisions(
+            decisions,
+            dry_run=self.dry_run,
+            current_prices=self._signal_prices or None,
+            abort_on_error=not self.dry_run,
+        )
         if not self.dry_run and executor.submitted_orders:
             from src.live.reconciler import Reconciler
 
