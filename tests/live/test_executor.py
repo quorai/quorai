@@ -585,3 +585,29 @@ def test_equity_refreshed_every_n_orders(monkeypatch):
 
     # 1 pre-loop + 2 mid-loop refreshes (at order counts 2 and 4)
     assert broker.get_account.call_count == 3
+
+
+def test_override_journal_scanned_once(tmp_path):
+    """RV-12: list_all_today() is called at most once regardless of how many decisions there are."""
+    from datetime import datetime
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    ny_tz = ZoneInfo("America/New_York")
+    fixed_now = datetime(2024, 1, 15, 10, 0, tzinfo=ny_tz)
+
+    with patch("src.live.executor.now_ny", return_value=fixed_now), \
+         patch("src.live.audit_journal.now_ny", return_value=fixed_now):
+        executor, broker, journal = _make_override_executor(tmp_path)
+
+        with patch.object(journal, "list_all_today", wraps=journal.list_all_today) as mock_scan:
+            executor.execute_decisions(
+                {
+                    "AAPL": {"action": "buy", "quantity": 1.0},
+                    "MSFT": {"action": "buy", "quantity": 1.0},
+                    "GOOG": {"action": "buy", "quantity": 1.0},
+                },
+                current_prices={"AAPL": 150.0, "MSFT": 300.0, "GOOG": 120.0},
+            )
+
+    assert mock_scan.call_count <= 1, f"list_all_today called {mock_scan.call_count} times; expected at most 1"

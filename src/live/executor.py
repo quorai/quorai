@@ -97,6 +97,11 @@ class LiveExecutor:
         equity_refresh_interval = s.EQUITY_REFRESH_INTERVAL
         order_count = 0
 
+        # Pre-load today's journal once for override-suffix index lookup.
+        _today_entries: list[dict] = self._journal.list_all_today() if (is_override_run and self._journal) else []
+        # Tracks IDs generated within this batch so suffix-counting stays consistent mid-batch.
+        _batch_order_ids: list[str] = []
+
         for ticker, decision in decisions.items():
             action = decision.get("action", "hold")
             qty = round(float(decision.get("quantity", 0)), 3)
@@ -200,7 +205,8 @@ class LiveExecutor:
             date_prefix = now_ny().strftime("%Y-%m-%d")
             if is_override_run and self._journal:
                 prefix = f"{date_prefix}-{ticker}-{action}-r"
-                used_indices = [int(e["order_id"].split("-r")[-1]) for e in self._journal.list_all_today() if e.get("order_id", "").startswith(prefix)]
+                all_ids = [e.get("order_id", "") for e in _today_entries] + _batch_order_ids
+                used_indices = [int(oid.split("-r")[-1]) for oid in all_ids if oid.startswith(prefix)]
                 next_index = (max(used_indices) + 1) if used_indices else 1
                 client_order_id = f"{date_prefix}-{ticker}-{action}-r{next_index}"
             else:
@@ -230,6 +236,8 @@ class LiveExecutor:
                         order_id=broker_order_id,
                     )
                 results[ticker] = "submitted"
+                if is_override_run:
+                    _batch_order_ids.append(client_order_id)
                 order_count += 1
                 if self._risk_gate and equity_refresh_interval > 0 and order_count % equity_refresh_interval == 0:
                     refresh_account = self._broker.get_account()
