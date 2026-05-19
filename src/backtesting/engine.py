@@ -234,17 +234,16 @@ class BacktestEngine:
                         # Using the first bar strictly after current_date avoids the
                         # holiday fallback that occurred with exact next_date_str matching.
                         fill_prices: Dict[str, float] = {}
-                        missing_data = False
                         for ticker in self._tickers:
                             try:
                                 df = self._prefetched_prices.get(ticker)
                                 if df is None or df.empty:
-                                    missing_data = True
-                                    break
+                                    logger.warning("No price data for %s on %s, skipping ticker", ticker, current_date_str)
+                                    continue
                                 sliced = df[df.index <= pd.Timestamp(current_date_str)]
                                 if sliced.empty:
-                                    missing_data = True
-                                    break
+                                    logger.warning("No price data for %s on %s, skipping ticker", ticker, current_date_str)
+                                    continue
                                 signal_prices[ticker] = float(sliced.iloc[-1]["close"])
 
                                 # Fill at the open of the first available bar after current_date.
@@ -256,10 +255,8 @@ class BacktestEngine:
                                 else:
                                     fill_prices[ticker] = signal_prices[ticker]
                             except Exception:
-                                logger.warning("Failed to get price data for %s on %s", ticker, current_date_str)
-                                missing_data = True
-                                break
-                        if missing_data:
+                                logger.warning("Failed to get price data for %s on %s, skipping ticker", ticker, current_date_str)
+                        if not signal_prices:
                             continue
                     except Exception:
                         logger.warning("Unexpected error processing date %s; skipping", current_date_str)
@@ -284,6 +281,9 @@ class BacktestEngine:
 
                     executed_trades: Dict[str, float] = {}
                     for ticker in self._tickers:
+                        if ticker not in fill_prices:
+                            executed_trades[ticker] = 0
+                            continue
                         d = decisions.get(ticker, {"action": "hold", "quantity": 0})
                         action = d.get("action", "hold")
                         qty = d.get("quantity", 0)

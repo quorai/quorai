@@ -67,3 +67,74 @@ def test_holiday_dates_skipped_before_agent_call():
     assert "2025-01-06" not in called_dates, f"Holiday date was passed to run_cycle: {called_dates}"
     assert called_dates, "run_cycle was never called — price data may not have been loaded"
     assert "2025-01-07" in called_dates
+
+
+def test_partial_ticker_data_still_runs_day():
+    """When one ticker has no price data, run_cycle still fires for the other.
+
+    AAPL has full data; MSFT has no data for any date. The engine must still
+    call run_cycle for each date (with only AAPL in signal_prices) and produce
+    equity-curve points — it must not skip the entire day.
+    """
+    from src.backtesting.engine import BacktestEngine
+
+    trading_dates = pd.DatetimeIndex(["2025-01-07", "2025-01-08", "2025-01-09"])
+    aapl_df = pd.DataFrame(
+        {"close": [150.0, 151.0, 152.0], "open": [149.0, 150.0, 151.0]},
+        index=trading_dates,
+    )
+    # MSFT: empty DataFrame — simulates a ticker with no data
+    msft_df = pd.DataFrame()
+
+    engine = BacktestEngine(
+        agent=MagicMock(),
+        tickers=["AAPL", "MSFT"],
+        start_date="2025-01-07",
+        end_date="2025-01-09",
+        initial_capital=100_000.0,
+        model_name="test-model",
+        model_provider="test-provider",
+        selected_analysts=None,
+        initial_margin_requirement=0.0,
+    )
+    engine._results = MagicMock()
+    engine._results.build_day_rows.return_value = []
+    engine._benchmark = MagicMock()
+    engine._benchmark.get_return_pct.return_value = 0.0
+    engine._executor = MagicMock()
+    engine._executor.execute_trade.return_value = 0
+    engine._perf = MagicMock()
+    engine._perf.compute_metrics.return_value = None
+
+    mock_ctx = MagicMock()
+    mock_ctx.signal_log_path = None
+    mock_ctx.run_cycle.return_value = {"decisions": {}}
+    mock_ctx.token_summary.return_value = {}
+
+    @contextmanager
+    def _mock_build(**kwargs):
+        yield mock_ctx
+
+    def _fake_prefetch(self_engine):
+        self_engine._prefetched_prices = {"AAPL": aapl_df, "MSFT": msft_df}
+        self_engine._spy_prices = pd.DataFrame()
+
+    with (
+        patch.object(BacktestEngine, "_prefetch_data", _fake_prefetch),
+        patch("src.backtesting.engine.PipelineContext.build", _mock_build),
+        patch("src.backtesting.engine.get_backtest_store"),
+        patch("src.backtesting.engine.progress"),
+    ):
+        engine.run_backtest()
+
+    called_dates = [c.kwargs["date"] for c in mock_ctx.run_cycle.call_args_list]
+    assert called_dates, "run_cycle was never called — day was skipped despite AAPL having data"
+    assert "2025-01-07" in called_dates, f"Expected 2025-01-07 in {called_dates}"
+
+    # signal_prices passed to run_cycle must contain AAPL but not MSFT
+    first_call_signal_prices = mock_ctx.run_cycle.call_args_list[0].kwargs["signal_prices"]
+    assert "AAPL" in first_call_signal_prices
+    assert "MSFT" not in first_call_signal_prices
+
+    # An equity-curve point must have been produced for each date
+    assert len(engine.get_portfolio_values()) == len(trading_dates)

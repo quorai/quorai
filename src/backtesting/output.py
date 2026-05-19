@@ -39,8 +39,9 @@ class OutputBuilder:
             # Analyst signal counts removed from day table
 
             pos = portfolio.get_positions()[ticker]
-            long_val = pos["long"] * current_prices[ticker]
-            short_val = pos["short"] * current_prices[ticker]
+            price = current_prices.get(ticker, 0.0)
+            long_val = pos["long"] * price
+            short_val = pos["short"] * price
             net_position_value = long_val - short_val
 
             _dec = decisions.get(ticker)
@@ -53,7 +54,7 @@ class OutputBuilder:
                     ticker=ticker,
                     action=action,
                     quantity=quantity,
-                    price=current_prices[ticker],
+                    price=current_prices.get(ticker, 0.0),
                     long_shares=pos["long"],
                     short_shares=pos["short"],
                     position_value=net_position_value,
