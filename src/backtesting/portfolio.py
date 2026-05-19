@@ -62,6 +62,10 @@ class Portfolio:
     def get_cash(self) -> float:
         return float(self._portfolio["cash"])
 
+    def available_buying_power(self) -> float:
+        """Cash available for new long purchases, net of margin committed to open shorts."""
+        return self._portfolio["cash"]
+
     def get_margin_used(self) -> float:
         return float(self._portfolio["margin_used"])
 
@@ -79,7 +83,7 @@ class Portfolio:
             return 0
         position = self._portfolio["positions"][ticker]
         cost = quantity * price
-        if cost <= self._portfolio["cash"]:
+        if cost <= self.available_buying_power():
             old_shares = position["long"]
             old_cost_basis = position["long_cost_basis"]
             total_shares = old_shares + quantity
@@ -90,7 +94,7 @@ class Portfolio:
             position["long"] = old_shares + quantity
             self._portfolio["cash"] -= cost
             return quantity
-        max_quantity = self._portfolio["cash"] / price if price > 0 else 0
+        max_quantity = self.available_buying_power() / price if price > 0 else 0
         if max_quantity > 0:
             cost = max_quantity * price
             old_shares = position["long"]
@@ -121,14 +125,18 @@ class Portfolio:
         return quantity
 
     def apply_short_open(self, ticker: str, quantity: float, price: float) -> float:
+        """Open a short position.
+
+        Debits margin_required from cash (after crediting proceeds) so that
+        available_buying_power() is always correct for long-buy affordability
+        checks without any additional adjustment.
+        """
         if quantity <= 0:
             return 0
         position = self._portfolio["positions"][ticker]
         proceeds = price * quantity
         margin_ratio = self._portfolio["margin_requirement"]
         margin_required = proceeds * margin_ratio
-        # cash already reflects the margin haircut (cash -= margin_required on each short open),
-        # so subtracting margin_used again would double-count it.
         available_cash = max(0.0, self._portfolio["cash"])
         if margin_required <= available_cash:
             old_short_shares = position["short"]

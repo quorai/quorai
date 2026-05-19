@@ -159,6 +159,15 @@ def test_apply_short_cover_fractional_shares() -> None:
     assert snap["positions"]["AAPL"]["short"] == pytest.approx(1.25)
 
 
+def test_available_buying_power_reflects_short_margin() -> None:
+    p = Portfolio(tickers=["AAPL"], initial_cash=10_000.0, margin_requirement=0.5)
+    assert p.available_buying_power() == pytest.approx(10_000.0)
+    # Short 100 @ $50: proceeds=5000, margin_required=2500 → net cash delta = +2500
+    p.apply_short_open("AAPL", 100, 50.0)
+    margin_amount = 100 * 50.0 * 0.5  # 2500
+    assert p.available_buying_power() == pytest.approx(10_000.0 + 5_000.0 - margin_amount)
+
+
 @pytest.mark.parametrize("action", [("buy"), ("sell"), ("short"), ("cover")])
 def test_zero_or_negative_quantity_is_noop(portfolio: Portfolio, action: str) -> None:
     before = portfolio.get_snapshot()
