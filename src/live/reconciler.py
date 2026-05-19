@@ -8,6 +8,17 @@ from src.live.audit_journal import AuditJournal
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_price(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    try:
+        val = float(raw)
+    except (ValueError, TypeError):
+        return None
+    return val if val > 0 else None
+
+
 _TERMINAL_STATUSES = frozenset(
     {
         "filled",
@@ -61,7 +72,7 @@ class Reconciler:
                 fill_status = getattr(order.status, "value", str(order.status))
                 filled_qty = float(order.filled_qty or "0")
                 raw_price = order.filled_avg_price
-                filled_avg_price = float(raw_price) if raw_price not in (None, "", "0") else None
+                filled_avg_price = _parse_price(raw_price)
                 ticker = order.symbol or ""
 
                 last_observed[order_id] = {

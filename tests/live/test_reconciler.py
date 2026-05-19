@@ -148,3 +148,27 @@ def test_broker_error_retried_later():
 
     assert results["ord-1"]["status"] == "filled"
     assert broker.get_order.call_count == 2
+
+
+def test_zero_string_fill_price_excluded():
+    """RV-16: raw filled_avg_price of '0' must map to None."""
+    from src.live.reconciler import _parse_price
+
+    assert _parse_price("0") is None
+
+
+def test_zero_decimal_fill_price_excluded():
+    """RV-16: '0.00' and '0.0' must also map to None."""
+    from src.live.reconciler import _parse_price
+
+    assert _parse_price("0.00") is None
+    assert _parse_price("0.0") is None
+
+
+def test_valid_fill_price_parsed():
+    """RV-16: a valid positive price string is parsed to float."""
+    from src.live.reconciler import _parse_price
+
+    assert _parse_price("123.45") == 123.45
+    assert _parse_price(None) is None
+    assert _parse_price("") is None
