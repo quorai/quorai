@@ -16,6 +16,14 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 _RETRY_DELAYS = (0.5, 2.0)  # delays between 3 attempts
+_SIDE_MAP = {"buy": OrderSide.BUY, "sell": OrderSide.SELL}
+
+
+def _resolve_side(side: str) -> OrderSide:
+    try:
+        return _SIDE_MAP[side.lower()]
+    except KeyError:
+        raise ValueError(f"Unknown order side: {side!r}. Expected 'buy' or 'sell'.")
 
 
 def _retry_api_call(fn, *args, **kwargs):
@@ -115,7 +123,7 @@ class AlpacaClient:
         client_order_id, if provided, is passed to Alpaca so that an identical
         re-submission is rejected by the broker rather than double-filled.
         """
-        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        order_side = _resolve_side(side)
         request = MarketOrderRequest(
             symbol=ticker,
             qty=qty,
@@ -145,8 +153,5 @@ class AlpacaClient:
         req = GetPortfolioHistoryRequest(period="1D", timeframe="1H", date_end=date)
         history = _retry_api_call(self._client.get_portfolio_history, history_filter=req)
         if history.base_value is None:
-            raise RuntimeError(
-                f"Alpaca returned no base_value for portfolio history on {date} — "
-                "cannot establish SOD equity; create logs/sod-equity-<date>.json manually"
-            )
+            raise RuntimeError(f"Alpaca returned no base_value for portfolio history on {date} — cannot establish SOD equity; create logs/sod-equity-<date>.json manually")
         return float(history.base_value)

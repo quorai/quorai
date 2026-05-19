@@ -94,3 +94,31 @@ def test_is_market_open_today_false_pre_market_on_trading_day():
     clock.next_open.date.return_value = dt.now(timezone.utc).date()
     client._client.get_clock.return_value = clock
     assert client.is_market_open_today() is False, "Pre-market on a trading day must return False"
+
+
+def test_unknown_side_raises_value_error():
+    """RV-10: unrecognised side string raises ValueError instead of silently using SELL."""
+    from src.broker.alpaca_client import _resolve_side
+
+    with pytest.raises(ValueError, match="Unknown order side"):
+        _resolve_side("unknown")
+
+
+def test_buy_side_maps_correctly():
+    """RV-10: 'buy' maps to OrderSide.BUY."""
+    from alpaca.trading.enums import OrderSide
+
+    from src.broker.alpaca_client import _resolve_side
+
+    assert _resolve_side("buy") == OrderSide.BUY
+    assert _resolve_side("BUY") == OrderSide.BUY
+
+
+def test_sell_side_maps_correctly():
+    """RV-10: 'sell' maps to OrderSide.SELL."""
+    from alpaca.trading.enums import OrderSide
+
+    from src.broker.alpaca_client import _resolve_side
+
+    assert _resolve_side("sell") == OrderSide.SELL
+    assert _resolve_side("SELL") == OrderSide.SELL
