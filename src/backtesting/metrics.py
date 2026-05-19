@@ -50,9 +50,9 @@ class PerformanceMetricsCalculator:
         downside_diff = np.minimum(excess, 0)
         downside_dev = float(np.sqrt(np.mean(downside_diff**2)))
         if downside_dev > 1e-12:
-            sortino = float(np.sqrt(self.annual_trading_days) * (mean_excess / downside_dev))
+            sortino: float | None = float(np.sqrt(self.annual_trading_days) * (mean_excess / downside_dev))
         else:
-            sortino = float("inf") if mean_excess > 0 else 0.0
+            sortino = None if mean_excess > 0 else 0.0
 
         rolling_max = df["Portfolio Value"].cummax()
         drawdown = (df["Portfolio Value"] - rolling_max) / rolling_max

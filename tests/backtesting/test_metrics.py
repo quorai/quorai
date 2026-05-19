@@ -51,3 +51,26 @@ def test_metrics_zero_volatility_sharpe_zero():
     metrics = {"sharpe_ratio": None, "sortino_ratio": None, "max_drawdown": None}
     calc.update_metrics(metrics, vals)
     assert metrics["sharpe_ratio"] == 0.0
+
+
+def test_sortino_none_when_no_downside_returns():
+    """All-positive excess returns → downside_dev == 0 → Sortino must be None, not inf."""
+    import json
+
+    calc = PerformanceMetricsCalculator(annual_trading_days=252, annual_rf_rate=0.0)
+    vals = _build_values([100.0, 110.0, 121.0, 133.0])  # monotonically up, no downside
+    metrics = {"sharpe_ratio": None, "sortino_ratio": None, "max_drawdown": None}
+    calc.update_metrics(metrics, vals)
+    assert metrics["sortino_ratio"] is None, "Sortino should be None when no downside returns"
+    # Must serialise cleanly as JSON null, not raise on float('inf')
+    json.dumps({"sortino": metrics["sortino_ratio"]})
+
+
+def test_sortino_finite_when_downside_exists():
+    """Returns with some negative days → Sortino is a finite float."""
+    calc = PerformanceMetricsCalculator(annual_trading_days=252, annual_rf_rate=0.0)
+    vals = _build_values([100.0, 110.0, 95.0, 105.0])
+    metrics = {"sharpe_ratio": None, "sortino_ratio": None, "max_drawdown": None}
+    calc.update_metrics(metrics, vals)
+    assert isinstance(metrics["sortino_ratio"], float)
+    assert metrics["sortino_ratio"] not in (float("inf"), float("-inf"))
