@@ -1,4 +1,5 @@
 import re
+from unittest.mock import patch
 
 from src.backtesting.comparison import RunConfig
 from src.backtesting.engine import BacktestEngine
@@ -65,3 +66,24 @@ def test_run_id_slug_normalises_label():
         run_label="full-analyst-set",
     )
     assert engine.run_id == "AAPL-2024-01-02-2024-01-31-full-analyst-set"
+
+
+def test_runconfig_uses_settings_model():
+    """RunConfig.model_name / model_provider must reflect Settings, not hardcoded values."""
+    from src.config import Settings, get_settings
+
+    custom_settings = Settings(DEFAULT_MODEL="custom/model-v1", DEFAULT_PROVIDER="CustomProvider")
+
+    with patch("src.backtesting.comparison.get_settings", return_value=custom_settings):
+        # Clear settings cache to ensure our patched version is used
+        get_settings.cache_clear()
+        cfg = RunConfig(
+            label="test",
+            tickers=["AAPL"],
+            start_date="2024-01-02",
+            end_date="2024-01-31",
+            initial_capital=100_000.0,
+        )
+
+    assert cfg.model_name == "custom/model-v1"
+    assert cfg.model_provider == "CustomProvider"

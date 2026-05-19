@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     AZURE_OPENAI_ENDPOINT: str = ""
     AZURE_OPENAI_DEPLOYMENT_NAME: str = ""
 
+    # Default LLM model for backtests (overridable via env)
+    DEFAULT_MODEL: str = "deepseek/deepseek-v4-flash"
+    DEFAULT_PROVIDER: str = "OpenRouter"
+
     # Risk gate caps (used by Phase 4)
     MAX_ORDER_NOTIONAL: float = 10_000.0
     MAX_ORDER_QTY: float = 1_000.0

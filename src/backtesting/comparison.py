@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
@@ -9,11 +9,21 @@ from typing import Any
 
 from src.backtesting.engine import BacktestEngine
 from src.backtesting.types import PerformanceMetrics
+from src.config import get_settings
 from src.main import run_quorai
 
 
 @dataclass
 class RunConfig:
+    """Configuration for a single backtest run in a comparison.
+
+    model_name and model_provider default to Settings.DEFAULT_MODEL /
+    Settings.DEFAULT_PROVIDER, which are themselves overridable via the
+    DEFAULT_MODEL / DEFAULT_PROVIDER environment variables. Callers that
+    construct RunConfig directly will pick up the active env configuration
+    rather than a hardcoded constant.
+    """
+
     label: str
     tickers: list[str]
     start_date: str
@@ -23,8 +33,8 @@ class RunConfig:
     use_regime_selection: bool = False
     use_conviction_weights: bool = False
     initial_margin_requirement: float = 0.0
-    model_name: str = "deepseek/deepseek-v4-flash"
-    model_provider: str = "OpenRouter"
+    model_name: str = field(default_factory=lambda: get_settings().DEFAULT_MODEL)
+    model_provider: str = field(default_factory=lambda: get_settings().DEFAULT_PROVIDER)
 
 
 @dataclass
