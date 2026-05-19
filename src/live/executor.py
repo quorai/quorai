@@ -95,6 +95,10 @@ class LiveExecutor:
                 raise RuntimeError(f"[executor] Alpaca returned no equity value: account={account!r}")
             account_equity = float(raw_equity)
 
+        s = get_settings()
+        equity_refresh_interval = s.EQUITY_REFRESH_INTERVAL
+        order_count = 0
+
         for ticker, decision in decisions.items():
             action = decision.get("action", "hold")
             qty = round(float(decision.get("quantity", 0)), 3)
@@ -228,6 +232,14 @@ class LiveExecutor:
                         order_id=broker_order_id,
                     )
                 results[ticker] = "submitted"
+                order_count += 1
+                if self._risk_gate and equity_refresh_interval > 0 and order_count % equity_refresh_interval == 0:
+                    refresh_account = self._broker.get_account()
+                    refresh_raw = refresh_account.equity
+                    if not refresh_raw:
+                        raise RuntimeError(f"[executor] Alpaca returned no equity on refresh: account={refresh_account!r}")
+                    account_equity = float(refresh_raw)
+                    logger.debug("[executor] equity refreshed after %d orders: %.2f", order_count, account_equity)
             except Exception as exc:
                 logger.error("[executor] Failed to submit order for %s: %s", ticker, exc)
                 if self._journal:

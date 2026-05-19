@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     MAX_ORDER_QTY: float = 1_000.0
     DAILY_LOSS_LIMIT_PCT: float = 0.05
     KILL_SWITCH: bool = False
+    EQUITY_REFRESH_INTERVAL: int = 0  # re-fetch equity every N submitted orders; 0 = disabled
 
     # Telegram approval
     TELEGRAM_BOT_TOKEN: str = ""

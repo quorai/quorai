@@ -557,3 +557,31 @@ def test_raises_when_equity_empty_string():
     executor = LiveExecutor(broker=broker, risk_gate=risk_gate, sod_equity=100_000.0)
     with pytest.raises(RuntimeError, match="no equity value"):
         executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 5.0}})
+
+
+def test_equity_refreshed_every_n_orders(monkeypatch):
+    """RV-09: get_account() is called once pre-loop plus once per N submitted orders."""
+    from unittest.mock import patch
+
+    from src.config import Settings
+
+    broker = _make_broker(account_equity="100000")
+    executor = LiveExecutor(broker=broker)
+
+    risk_gate = MagicMock()
+    risk_gate.check.return_value = (True, None)
+    executor._risk_gate = risk_gate
+
+    settings = Settings(EQUITY_REFRESH_INTERVAL=2)
+    with patch("src.live.executor.get_settings", return_value=settings):
+        executor.execute_decisions(
+            {
+                "AAPL": {"action": "buy", "quantity": 1.0},
+                "MSFT": {"action": "buy", "quantity": 1.0},
+                "GOOG": {"action": "buy", "quantity": 1.0},
+                "AMZN": {"action": "buy", "quantity": 1.0},
+            }
+        )
+
+    # 1 pre-loop + 2 mid-loop refreshes (at order counts 2 and 4)
+    assert broker.get_account.call_count == 3
