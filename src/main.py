@@ -61,10 +61,8 @@ def run_quorai(
 ):
     if selected_analysts is None:
         selected_analysts = []
-    # Start progress tracking
-    progress.start()
 
-    try:
+    with progress.display():
         workflow = create_workflow()
         agent = workflow.compile()
 
@@ -106,9 +104,6 @@ def run_quorai(
             "debate_summaries": final_state["data"].get("debate_summaries", {}),
             "current_prices": final_state["data"].get("current_prices", {}),
         }
-    finally:
-        # Stop progress tracking
-        progress.stop()
 
 
 def start(state: AgentState):

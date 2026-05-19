@@ -15,14 +15,7 @@ from src.main import run_quorai
 
 @dataclass
 class RunConfig:
-    """Configuration for a single backtest run in a comparison.
-
-    model_name and model_provider default to Settings.DEFAULT_MODEL /
-    Settings.DEFAULT_PROVIDER, which are themselves overridable via the
-    DEFAULT_MODEL / DEFAULT_PROVIDER environment variables. Callers that
-    construct RunConfig directly will pick up the active env configuration
-    rather than a hardcoded constant.
-    """
+    """model_name/model_provider default from Settings so env overrides apply at construction time."""
 
     label: str
     tickers: list[str]

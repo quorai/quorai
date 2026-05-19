@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import sys
 from typing import Callable, Dict, List, Optional
@@ -20,12 +21,6 @@ class AgentProgress:
         self.live = Live(console=console, refresh_per_second=4, redirect_stdout=False, redirect_stderr=False) if _is_tty else None
         self.started = False
         self.update_handlers: List[Callable[[str, Optional[str], str], None]] = []
-        self._header: str = ""
-
-    def set_header(self, header: str) -> None:
-        """Set a sticky header line shown above the agent status table."""
-        self._header = header
-        self._refresh_display()
 
     def register_handler(self, handler: Callable[[str, Optional[str], str], None]):
         """Register a handler to be called when agent status updates."""
@@ -48,6 +43,23 @@ class AgentProgress:
         if self.started and self.live is not None:
             self.live.stop()
             self.started = False
+
+    @contextmanager
+    def display(self):
+        """Ensure the live display is running for this scope.
+
+        Only stops Live on exit if this call was the one that started it,
+        so nested callers (e.g. run_quorai inside a backtest loop) don't
+        tear down an outer caller's Live session.
+        """
+        started_here = not self.started
+        if started_here:
+            self.start()
+        try:
+            yield
+        finally:
+            if started_here:
+                self.stop()
 
     def update_status(self, agent_name: str, ticker: Optional[str] = None, status: str = "", analysis: Optional[str] = None):
         """Update the status of an agent."""
@@ -95,10 +107,6 @@ class AgentProgress:
         # repeated columns.clear() calls that don't clear the rows list.
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column(width=100)
-
-        if self._header:
-            header_text = Text(self._header, style=Style(color="cyan", bold=True))
-            table.add_row(header_text)
 
         # Sort agents with Risk Management and Portfolio Management at the bottom
         def sort_key(item):

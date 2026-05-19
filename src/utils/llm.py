@@ -327,6 +327,12 @@ def call_llm(
                 logger.warning("json_mode rejected by provider for %s (attempt %d); switching to manual extraction", agent_name or model_name, attempt + 1)
                 use_manual_extraction = True
 
+            # Empty/invalid JSON response (e.g. OpenRouter returns 200 with empty body) — switch to
+            # manual extraction so the hint message is appended on the next attempt.
+            elif not use_manual_extraction and ("expecting value" in exc_str.lower() or "jsondecode" in type(exc).__name__.lower()):
+                logger.warning("Empty or unparseable JSON from LLM for %s (attempt %d); switching to manual extraction", agent_name or model_name, attempt + 1)
+                use_manual_extraction = True
+
             # Exponential back-off for rate-limit errors; immediate retry otherwise.
             # Use a longer base for 429s so we can outlast a 60-second window reset.
             is_rate_limit = "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()

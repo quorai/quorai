@@ -48,7 +48,6 @@ class Settings(BaseSettings):
     AZURE_OPENAI_ENDPOINT: str = ""
     AZURE_OPENAI_DEPLOYMENT_NAME: str = ""
 
-    # Default LLM model for backtests (overridable via env)
     DEFAULT_MODEL: str = "deepseek/deepseek-v4-flash"
     DEFAULT_PROVIDER: str = "OpenRouter"
 

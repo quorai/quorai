@@ -211,7 +211,7 @@ class BacktestEngine:
                 use_conviction_weights=self._use_conviction_weights,
                 request=self._request,
                 risk_profile=self._risk_profile,
-            ) as ctx:
+            ) as ctx, progress.display():
                 self._signal_log_path = ctx.signal_log_path
                 from src.orchestration.price_feed import BacktestPriceFeed  # lazy: avoids circular import via package __init__
                 price_feed = BacktestPriceFeed(self._prefetched_prices, self._spy_prices)
@@ -222,7 +222,7 @@ class BacktestEngine:
                     current_date_str = current_date.strftime("%Y-%m-%d")
 
                     logger.info("Backtest day %d/%d (%s)", i + 1, len(dates), current_date_str)
-                    progress.set_header(f"Day {i + 1}/{len(dates)} — {current_date_str}")
+                    progress.print(f"Day {i + 1}/{len(dates)} — {current_date_str}", style="bold cyan")
 
                     # Agents form their view using data through current_date (signal bar).
                     # Trades fill at the first actual trading day's open after current_date to
@@ -324,7 +324,7 @@ class BacktestEngine:
                 self._token_summary_data = ctx.token_summary()
         finally:
             get_backtest_store().uninstall()
-            progress.set_header("")
+
 
         return self._performance_metrics
 
