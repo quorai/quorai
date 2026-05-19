@@ -205,8 +205,6 @@ class BacktestEngine:
                     # 12-month lookback to feed longest indicator (252-day vol, 126-day Hurst, 6-month momentum + buffer).
                     lookback_start = (current_date - relativedelta(months=12)).strftime("%Y-%m-%d")
                     current_date_str = current_date.strftime("%Y-%m-%d")
-                    if lookback_start == current_date_str:
-                        continue
 
                     logger.info("Backtest day %d/%d (%s)", i + 1, len(dates), current_date_str)
                     progress.set_header(f"Day {i + 1}/{len(dates)} — {current_date_str}")
