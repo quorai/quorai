@@ -213,6 +213,8 @@ class BacktestEngine:
                 risk_profile=self._risk_profile,
             ) as ctx:
                 self._signal_log_path = ctx.signal_log_path
+                from src.orchestration.price_feed import BacktestPriceFeed  # lazy: avoids circular import via package __init__
+                price_feed = BacktestPriceFeed(self._prefetched_prices, self._spy_prices)
 
                 for i, current_date in enumerate(dates):
                     # 12-month lookback to feed longest indicator (252-day vol, 126-day Hurst, 6-month momentum + buffer).
@@ -229,23 +231,18 @@ class BacktestEngine:
 
                     try:
                         # Prices for portfolio valuation use the signal bar's close.
-                        signal_prices: Dict[str, float] = {}
+                        signal_prices: Dict[str, float] = price_feed.get_signal_prices(
+                            self._tickers, current_date_str, lookback_start
+                        )
+                        if not signal_prices:
+                            continue
                         # Prices for trade fills use the next available bar's open.
                         # Using the first bar strictly after current_date avoids the
                         # holiday fallback that occurred with exact next_date_str matching.
                         fill_prices: Dict[str, float] = {}
-                        for ticker in self._tickers:
+                        for ticker in signal_prices:
                             try:
                                 df = self._prefetched_prices.get(ticker)
-                                if df is None or df.empty:
-                                    logger.warning("No price data for %s on %s, skipping ticker", ticker, current_date_str)
-                                    continue
-                                sliced = df[df.index <= pd.Timestamp(current_date_str)]
-                                if sliced.empty:
-                                    logger.warning("No price data for %s on %s, skipping ticker", ticker, current_date_str)
-                                    continue
-                                signal_prices[ticker] = float(sliced.iloc[-1]["close"])
-
                                 # Fill at the open of the first available bar after current_date.
                                 # Exact-match on the calendar's "next business day" silently falls
                                 # back to same-bar close on NYSE holidays (no bar exists that day).
@@ -255,9 +252,7 @@ class BacktestEngine:
                                 else:
                                     fill_prices[ticker] = signal_prices[ticker]
                             except Exception:
-                                logger.warning("Failed to get price data for %s on %s, skipping ticker", ticker, current_date_str)
-                        if not signal_prices:
-                            continue
+                                fill_prices[ticker] = signal_prices[ticker]
                     except Exception:
                         logger.warning("Unexpected error processing date %s; skipping", current_date_str)
                         continue
@@ -267,7 +262,7 @@ class BacktestEngine:
                         lookback_start=lookback_start,
                         portfolio=self._portfolio,
                         signal_prices=signal_prices,
-                        spy_df=self._spy_prices,
+                        spy_df=price_feed.get_spy_df(lookback_start, current_date_str),
                     )
                     decisions = agent_output["decisions"]
 

@@ -132,27 +132,22 @@ class LiveRunner:
         start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         end_date = today.strftime("%Y-%m-%d")
 
+        from src.orchestration.price_feed import LivePriceFeed  # lazy: avoids circular import via package __init__
+        price_feed = LivePriceFeed()
+
         # 4. Fetch SPY for regime selection (~120-day lookback)
         spy_df = None
         if self._use_regime_selection:
-            from src.tools.api import get_price_data
-
             regime_start = (today - timedelta(days=120)).strftime("%Y-%m-%d")
-            fetched = get_price_data("SPY", regime_start, end_date)
-            spy_df = fetched if not fetched.empty else None
+            spy_df = price_feed.get_spy_df(regime_start, end_date)
             if spy_df is None:
                 logger.warning("SPY price data unavailable — skipping regime selection")
 
         # 5. Fetch signal prices (7-day lookback) for the signal log and risk gate
         signal_prices: dict[str, float] = {}
         if self._enable_signal_log:
-            from src.tools.api import get_prices
-
             lookback_str = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-            for ticker in self.tickers:
-                prices = get_prices(ticker, lookback_str, end_date)
-                if prices:
-                    signal_prices[ticker] = prices[-1].close
+            signal_prices = price_feed.get_signal_prices(self.tickers, end_date, lookback_str)
 
         # 6. Run agent graph via shared orchestration context
         with PipelineContext.build(
