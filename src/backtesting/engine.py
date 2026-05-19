@@ -181,10 +181,7 @@ class BacktestEngine:
         run_id = self.run_id
 
         dates = pd.date_range(self._start_date, self._end_date, freq="B")
-        if len(dates) > 0:
-            self._portfolio_values = [{"Date": dates[0], "Portfolio Value": self._initial_capital}]
-        else:
-            self._portfolio_values = []
+        self._portfolio_values = []
 
         try:
             with PipelineContext.build(
