@@ -59,7 +59,8 @@ def test_submit_order_sends_correct_payload():
 
 def test_cancel_order_calls_cancel_by_id():
     client = _make_client()
-    client.cancel_order("order-abc")
+    with patch("src.broker.alpaca_client.time.sleep"):
+        client.cancel_order("order-abc")
     client._client.cancel_order_by_id.assert_called_once_with("order-abc")
 
 
@@ -149,3 +150,38 @@ def test_retry_uses_jitter():
     for i, actual_call in enumerate(mock_sleep.call_args_list):
         slept = actual_call.args[0]
         assert slept > base_delays[i], f"Expected jitter to increase delay above {base_delays[i]}, got {slept}"
+
+
+def test_cancel_returns_canceled_status_on_clean_cancel():
+    """RV-15: clean cancel → status 'canceled', filled_qty 0."""
+    from unittest.mock import patch
+
+    client = _make_client()
+    order = MagicMock()
+    order.status = "canceled"
+    order.filled_qty = "0"
+    client._client.get_order_by_id.return_value = order
+
+    with patch("src.broker.alpaca_client.time.sleep"):
+        result = client.cancel_order("order-abc")
+
+    assert result["status"] == "canceled"
+    assert result["filled_qty"] == 0.0
+    client._client.cancel_order_by_id.assert_called_once_with("order-abc")
+
+
+def test_cancel_returns_filled_qty_when_partially_filled():
+    """RV-15: partial fill during cancel race → filled_qty reflects actual fill."""
+    from unittest.mock import patch
+
+    client = _make_client()
+    order = MagicMock()
+    order.status = "canceled"
+    order.filled_qty = "3.5"
+    client._client.get_order_by_id.return_value = order
+
+    with patch("src.broker.alpaca_client.time.sleep"):
+        result = client.cancel_order("order-xyz")
+
+    assert result["status"] == "canceled"
+    assert result["filled_qty"] == 3.5

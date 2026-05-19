@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _RETRY_DELAYS = (0.5, 2.0)  # delays between 3 attempts
 _SIDE_MAP = {"buy": OrderSide.BUY, "sell": OrderSide.SELL}
+_CANCEL_TERMINAL_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "done_for_day", "stopped", "suspended", "replaced"})
 
 
 def _resolve_side(side: str) -> OrderSide:
@@ -137,10 +138,26 @@ class AlpacaClient:
         logger.info("Submitted %s order: %s %s qty=%.4f", order_type, side.upper(), ticker, qty)
         return order
 
-    def cancel_order(self, order_id: str) -> None:
-        """Cancels an open order by ID."""
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancels an open order and waits for a terminal status.
+
+        Returns {"status": str, "filled_qty": float} reflecting the post-cancel
+        state. A brief poll loop handles the partial-fill race where the broker
+        acknowledges the cancel (HTTP 200) while residual quantity continues to fill.
+        """
         _retry_api_call(self._client.cancel_order_by_id, order_id)
-        logger.info("Cancelled order %s", order_id)
+        order = None
+        for _ in range(3):
+            time.sleep(0.5)
+            order = cast(Order, _retry_api_call(self._client.get_order_by_id, order_id))
+            if str(order.status) in _CANCEL_TERMINAL_STATUSES:
+                break
+        if order is None:
+            return {"status": "unknown", "filled_qty": 0.0}
+        status = str(order.status)
+        filled_qty = float(order.filled_qty or 0)
+        logger.info("Cancelled order %s → status=%s filled_qty=%.4f", order_id, status, filled_qty)
+        return {"status": status, "filled_qty": filled_qty}
 
     def is_market_open_today(self) -> bool:
         clock = _retry_api_call(self._client.get_clock)
