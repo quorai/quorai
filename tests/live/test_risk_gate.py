@@ -212,3 +212,27 @@ def test_missing_price_rejected_before_notional(tmp_path):
     allowed, reason = _check(gate, qty=1_000_000.0, price=0.0)
     assert allowed is False
     assert reason == "missing_price"
+
+
+# --- Kill-switch hot-reload (RV-02) ---
+
+def test_kill_switch_respected_after_settings_change(tmp_path, monkeypatch):
+    """RV-02: kill switch toggled in .env after construction is picked up by the risk gate."""
+    from unittest.mock import MagicMock
+
+    gate = _make_gate(tmp_path, KILL_SWITCH=False)
+
+    live_settings = Settings(
+        ALPACA_API_KEY="x",
+        ALPACA_SECRET_KEY="x",
+        MAX_ORDER_NOTIONAL=10_000.0,
+        MAX_ORDER_QTY=1_000.0,
+        DAILY_LOSS_LIMIT_PCT=0.05,
+        KILL_SWITCH=True,
+    )
+    mock_get = MagicMock(return_value=live_settings)
+    monkeypatch.setattr("src.live.risk_gate.get_settings", mock_get)
+
+    allowed, reason = _check(gate)
+    assert allowed is False
+    assert reason == "kill_switch_active"

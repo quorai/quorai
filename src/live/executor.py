@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from src.backtesting.types import AgentDecisions
 from src.broker import Broker
+from src.config import get_settings
 from src.live.audit_journal import AuditJournal
 from src.live.risk_gate import RiskGate
 from src.utils.tz import now_ny
@@ -50,6 +51,8 @@ class LiveExecutor:
         results: dict[str, str] = {}
         prices = current_prices or {}
         self.submitted_orders = {}
+
+        get_settings.cache_clear()
 
         is_override_run = False
         if not dry_run and self._idempotency_guard is not None:

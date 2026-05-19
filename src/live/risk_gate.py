@@ -1,6 +1,6 @@
 import logging
 
-from src.config import Settings
+from src.config import Settings, get_settings
 from src.live.audit_journal import AuditJournal
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class RiskGate:
         current_short: float,
     ) -> str:
         s = self._settings
-        if s.KILL_SWITCH:
+        if s.KILL_SWITCH or get_settings().KILL_SWITCH:
             return "kill_switch_active"
         if price <= 0:
             return "missing_price"
