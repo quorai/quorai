@@ -90,7 +90,10 @@ class LiveExecutor:
         account_equity = 0.0
         if self._risk_gate and not dry_run:
             account = self._broker.get_account()
-            account_equity = float(account.equity or "0")
+            raw_equity = account.equity
+            if not raw_equity:
+                raise RuntimeError(f"[executor] Alpaca returned no equity value: account={account!r}")
+            account_equity = float(raw_equity)
 
         for ticker, decision in decisions.items():
             action = decision.get("action", "hold")

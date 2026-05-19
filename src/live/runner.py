@@ -100,7 +100,10 @@ class LiveRunner:
                 logger.info("Position synced: %s long=%.0f short=%.0f", _tkr, _pos.get("long", 0), _pos.get("short", 0))
 
         # 2. Capture SOD equity (first call today saves it; dry-run never writes the file)
-        account_equity = float(account.equity or "0")
+        raw_equity = account.equity
+        if not raw_equity:
+            raise RuntimeError(f"[runner] Alpaca returned no equity value: account={account!r}")
+        account_equity = float(raw_equity)
         sod = load_sod_equity()
         if sod is None:
             if self.dry_run:
@@ -227,7 +230,15 @@ class LiveRunner:
                     "portfolio_snapshot": None,
                 }
 
-        decisions, snapshot = self.prepare()
+        try:
+            decisions, snapshot = self.prepare()
+        except RuntimeError as exc:
+            logger.error("[runner] aborting cycle: %s", exc)
+            return {
+                "decisions": {},
+                "execution_results": {t: f"skipped (prepare_error: {exc})" for t in self.tickers},
+                "portfolio_snapshot": None,
+            }
 
         print("\nDecisions:")
         print(f"{'Ticker':<8} {'Action':<8} {'Qty':>8}")

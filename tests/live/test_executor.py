@@ -524,3 +524,36 @@ def test_override_suffix_skips_rejected_entries(tmp_path, monkeypatch):
 
     order_id = broker.submit_order.call_args.kwargs["client_order_id"]
     assert order_id == "2024-01-15-AAPL-buy-r2", f"Expected -r2, got: {order_id}"
+
+
+def _make_broker_with_equity(equity_value):
+    """Helper: broker whose get_account().equity returns equity_value (str, None, or '')."""
+    broker = _make_broker()
+    account = MagicMock()
+    account.equity = equity_value
+    broker.get_account.return_value = account
+    return broker
+
+
+def test_raises_when_equity_missing():
+    """RV-07: RuntimeError when get_account().equity is None."""
+    import pytest
+
+    broker = _make_broker_with_equity(None)
+    risk_gate = MagicMock()
+    risk_gate.check.return_value = (True, None)
+    executor = LiveExecutor(broker=broker, risk_gate=risk_gate, sod_equity=100_000.0)
+    with pytest.raises(RuntimeError, match="no equity value"):
+        executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 5.0}})
+
+
+def test_raises_when_equity_empty_string():
+    """RV-07: RuntimeError when get_account().equity is an empty string."""
+    import pytest
+
+    broker = _make_broker_with_equity("")
+    risk_gate = MagicMock()
+    risk_gate.check.return_value = (True, None)
+    executor = LiveExecutor(broker=broker, risk_gate=risk_gate, sod_equity=100_000.0)
+    with pytest.raises(RuntimeError, match="no equity value"):
+        executor.execute_decisions({"AAPL": {"action": "buy", "quantity": 5.0}})
