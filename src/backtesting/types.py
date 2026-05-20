@@ -110,3 +110,7 @@ class PerformanceMetrics(TypedDict, total=False):
     long_short_ratio: Optional[float]
     gross_exposure: Optional[float]
     net_exposure: Optional[float]
+    alpha_vs_spy_pct: Optional[float]
+    alpha_vs_basket_pct: Optional[float]
+    information_ratio_vs_spy: Optional[float]
+    information_ratio_vs_basket: Optional[float]

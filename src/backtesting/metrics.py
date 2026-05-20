@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from .types import PerformanceMetrics, PortfolioValuePoint
 
@@ -73,3 +76,51 @@ class PerformanceMetricsCalculator:
             "max_drawdown": max_drawdown,
             "max_drawdown_date": max_drawdown_date,
         }
+
+    def compute_benchmark_relative(
+        self,
+        values: Sequence[PortfolioValuePoint],
+        benchmark_daily_returns: "pd.Series",
+    ) -> dict[str, float | None]:
+        """Compute alpha and information ratio vs a benchmark daily-return series.
+
+        Returns {"alpha_pct": float|None, "information_ratio": float|None}.
+        Alpha is in percentage points. IR is annualised.
+        """
+        import numpy as np
+        import pandas as pd
+
+        _empty: dict[str, float | None] = {"alpha_pct": None, "information_ratio": None}
+
+        if not values:
+            return _empty
+
+        df = pd.DataFrame(values).set_index("Date")
+        if "Portfolio Value" not in df or df.empty:
+            return _empty
+
+        strategy_daily = df["Portfolio Value"].pct_change().dropna()
+        if strategy_daily.empty:
+            return _empty
+
+        # Align on date (inner join)
+        aligned = pd.concat(
+            {"strategy": strategy_daily, "benchmark": benchmark_daily_returns},
+            axis=1,
+            join="inner",
+        ).dropna()
+        if len(aligned) < 2:
+            return _empty
+
+        strategy_total = float((1 + aligned["strategy"]).prod() - 1)
+        benchmark_total = float((1 + aligned["benchmark"]).prod() - 1)
+        alpha_pct = (strategy_total - benchmark_total) * 100.0
+
+        active = aligned["strategy"] - aligned["benchmark"]
+        active_std = float(active.std())
+        if active_std > 1e-12:
+            ir: float | None = float(np.sqrt(self.annual_trading_days) * active.mean() / active_std)
+        else:
+            ir = None
+
+        return {"alpha_pct": alpha_pct, "information_ratio": ir}

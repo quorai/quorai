@@ -21,6 +21,51 @@ class BenchmarkCalculator:
         """Store a pre-fetched price DataFrame under the given ticker key."""
         self._dfs[ticker] = df
 
+    def get_daily_returns(self, ticker: str, start_date: str, end_date: str) -> "pd.Series | None":
+        """Return a Series of daily pct-change returns for ticker in [start_date, end_date].
+
+        Indexed by date (same dtype as the DataFrame index). Returns None if data is missing.
+        """
+        try:
+            df = self._dfs.get(ticker)
+            if df is None or df.empty:
+                return None
+            mask = (df.index >= start_date) & (df.index <= end_date)
+            window = df.loc[mask, "close"].dropna()
+            if len(window) < 2:
+                return None
+            return window.pct_change().dropna()
+        except Exception:
+            logger.warning("Failed to compute daily returns for %s (%s→%s)", ticker, start_date, end_date)
+            return None
+
+    def get_basket_daily_returns(self, tickers: list[str], start_date: str, end_date: str) -> "pd.Series | None":
+        """Return daily returns for a buy-and-hold equal-weight basket of tickers.
+
+        Each ticker is normalized by its first close so the basket is buy-and-hold weighted.
+        Returns None if any ticker's data is missing or insufficient.
+        """
+        import numpy as np
+
+        normalized: list[pd.Series] = []
+        for ticker in tickers:
+            df = self._dfs.get(ticker)
+            if df is None or df.empty:
+                return None
+            mask = (df.index >= start_date) & (df.index <= end_date)
+            window = df.loc[mask, "close"].dropna()
+            if len(window) < 2:
+                return None
+            first = float(window.iloc[0])
+            if first == 0 or np.isnan(first):
+                return None
+            normalized.append(window / first)
+        basket = pd.concat(normalized, axis=1, join="inner").mean(axis=1)
+        daily = basket.pct_change().dropna()
+        if len(daily) < 1:
+            return None
+        return daily
+
     def get_return_pct(self, ticker: str, start_date: str, end_date: str) -> float | None:
         """Compute simple buy-and-hold return % for ticker from start_date to end_date.
 

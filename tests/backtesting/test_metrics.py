@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 
 import numpy as np
+import pandas as pd
+import pytest
 
 from src.backtesting.metrics import PerformanceMetricsCalculator
 
@@ -74,3 +76,63 @@ def test_sortino_finite_when_downside_exists():
     calc.update_metrics(metrics, vals)
     assert isinstance(metrics["sortino_ratio"], float)
     assert metrics["sortino_ratio"] not in (float("inf"), float("-inf"))
+
+
+# ---------------------------------------------------------------------------
+# compute_benchmark_relative
+# ---------------------------------------------------------------------------
+
+
+def _build_bm_series(daily_returns: list[float], start: datetime) -> pd.Series:
+    """Build a benchmark daily-return Series aligned to the same dates as _build_values."""
+    dates = [start + timedelta(days=i + 1) for i in range(len(daily_returns))]
+    return pd.Series(daily_returns, index=pd.DatetimeIndex(dates))
+
+
+def test_benchmark_relative_known_alpha():
+    calc = PerformanceMetricsCalculator(annual_trading_days=252, annual_rf_rate=0.0)
+    # Strategy: 100 → 102 → 104.04 → 106.12  (+2%/day for 3 days)
+    # Benchmark: +1%/day for 3 days
+    start = datetime(2024, 1, 1)
+    vals = _build_values([100.0, 102.0, 104.04, 106.1208])
+    bm = _build_bm_series([0.01, 0.01, 0.01], start)
+    result = calc.compute_benchmark_relative(vals, bm)
+
+    # strategy total (aligned): 1.02^3 - 1 ≈ 6.1208%; benchmark: 1.01^3 - 1 ≈ 3.0301%
+    assert result["alpha_pct"] == pytest.approx(6.1208 - 3.0301, abs=0.01)
+    assert result["information_ratio"] is None  # constant active returns → zero std
+
+
+def test_benchmark_relative_ir_varies():
+    import math
+
+    calc = PerformanceMetricsCalculator(annual_trading_days=252, annual_rf_rate=0.0)
+    # Strategy: 100 → 101 → 100.5 → 101.5  daily returns: +1%, -0.495%, +0.995%
+    start = datetime(2024, 1, 2)
+    vals = _build_values([100.0, 101.0, 100.5, 101.5])
+    # Benchmark: +0.5%/day every day → active = strategy - 0.5% each day
+    bm = _build_bm_series([0.005, 0.005, 0.005], start)
+    result = calc.compute_benchmark_relative(vals, bm)
+
+    assert result["alpha_pct"] is not None
+    assert result["information_ratio"] is not None
+    assert isinstance(result["information_ratio"], float)
+    assert math.isfinite(result["information_ratio"])
+
+
+def test_benchmark_relative_misaligned_dates_returns_none():
+    calc = PerformanceMetricsCalculator(annual_trading_days=252, annual_rf_rate=0.0)
+    vals = _build_values([100.0, 102.0, 104.0])
+    # Benchmark on completely different dates — no overlap after inner join
+    bm = pd.Series([0.01, 0.01], index=pd.to_datetime(["2025-06-01", "2025-06-02"]))
+    result = calc.compute_benchmark_relative(vals, bm)
+    assert result["alpha_pct"] is None
+    assert result["information_ratio"] is None
+
+
+def test_benchmark_relative_empty_values():
+    calc = PerformanceMetricsCalculator()
+    bm = _build_bm_series([0.01, 0.01], datetime(2024, 1, 1))
+    result = calc.compute_benchmark_relative([], bm)
+    assert result["alpha_pct"] is None
+    assert result["information_ratio"] is None

@@ -18,6 +18,7 @@ from src.utils.validation import validate_ticker
 
 from .comparison import RunConfig, run_comparison
 from .engine import BacktestEngine
+from .metrics import PerformanceMetricsCalculator
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -106,6 +107,33 @@ def _print_baselines(baselines: dict, tickers: list[str], start_date: str, end_d
     print(f"  {label}:  {_fmt(baselines['equal_weight_basket_return_pct'])}")
 
 
+def _print_active_metrics(
+    total_return: float,
+    alpha_vs_spy: float | None,
+    alpha_vs_basket: float | None,
+    ir_vs_spy: float | None,
+    ir_vs_basket: float | None,
+) -> None:
+    def _fmt_pct(v: float | None) -> str:
+        if v is None:
+            return "N/A"
+        color = Fore.GREEN if v >= 0 else Fore.RED
+        sign = "+" if v >= 0 else ""
+        return f"{color}{sign}{v:.2f}%{Style.RESET_ALL}"
+
+    def _fmt_ir(v: float | None) -> str:
+        if v is None:
+            return "N/A"
+        return f"{v:.2f}"
+
+    print(f"\n{Fore.WHITE}{Style.BRIGHT}ACTIVE PERFORMANCE{Style.RESET_ALL}")
+    print(f"  Strategy:                      {_fmt_pct(total_return)}")
+    print(f"  Alpha vs SPY:                  {_fmt_pct(alpha_vs_spy)}")
+    print(f"  Alpha vs Equal-weight basket:  {_fmt_pct(alpha_vs_basket)}")
+    print(f"  IR vs SPY:                     {_fmt_ir(ir_vs_spy)}")
+    print(f"  IR vs Equal-weight basket:     {_fmt_ir(ir_vs_basket)}")
+
+
 def _main_run(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run a single backtest")
     _add_common_args(parser)
@@ -179,6 +207,26 @@ def _main_run(argv: list[str]) -> int:
 
         baselines = _compute_baselines(engine, tickers, start_date, end_date)
         _print_baselines(baselines, tickers, start_date, end_date)
+
+        bm = engine.get_benchmark()
+        _calc = PerformanceMetricsCalculator()
+        spy_daily = bm.get_daily_returns("SPY", start_date, end_date)
+        basket_daily = bm.get_basket_daily_returns(tickers, start_date, end_date)
+        spy_rel = _calc.compute_benchmark_relative(values, spy_daily) if spy_daily is not None else {"alpha_pct": None, "information_ratio": None}
+        basket_rel = _calc.compute_benchmark_relative(values, basket_daily) if basket_daily is not None else {"alpha_pct": None, "information_ratio": None}
+
+        metrics["alpha_vs_spy_pct"] = spy_rel["alpha_pct"]
+        metrics["alpha_vs_basket_pct"] = basket_rel["alpha_pct"]
+        metrics["information_ratio_vs_spy"] = spy_rel["information_ratio"]
+        metrics["information_ratio_vs_basket"] = basket_rel["information_ratio"]
+
+        _print_active_metrics(
+            total_return if values else 0.0,
+            spy_rel["alpha_pct"],
+            basket_rel["alpha_pct"],
+            spy_rel["information_ratio"],
+            basket_rel["information_ratio"],
+        )
 
         result_record = {"metrics": dict(metrics), "baselines": baselines}
         if values:
