@@ -28,6 +28,7 @@ class RunConfig:
     initial_margin_requirement: float = 0.0
     model_name: str = field(default_factory=lambda: get_settings().DEFAULT_MODEL)
     model_provider: str = field(default_factory=lambda: get_settings().DEFAULT_PROVIDER)
+    seed: int | None = None
 
 
 @dataclass
@@ -59,6 +60,7 @@ def run_comparison(configs: list[RunConfig], output_dir: str = "logs") -> list[R
             use_regime_selection=cfg.use_regime_selection,
             use_conviction_weights=cfg.use_conviction_weights,
             run_label=slug,
+            seed=cfg.seed,
         )
         metrics = engine.run_backtest()
         pv = engine.get_portfolio_values()

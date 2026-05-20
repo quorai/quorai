@@ -150,6 +150,7 @@ def _main_run(argv: list[str]) -> int:
         use_regime_selection=args.use_regime_selection,
         use_conviction_weights=args.use_conviction_weights,
         risk_profile=get_profile(args.risk_profile),
+        seed=args.seed,
     )
 
     cli_args_record = {"argv": sys.argv[:], "parsed": vars(args)}
@@ -224,6 +225,7 @@ def _main_compare(argv: list[str]) -> int:
         selected_analysts=_resolve_analysts(args),
         initial_margin_requirement=args.margin_requirement,
         risk_profile=get_profile(args.risk_profile),
+        seed=args.seed,
     )
 
     if args.mode in ("regime", "both"):

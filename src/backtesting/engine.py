@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
+import json
 import logging
 from typing import Any, Callable, Dict, Sequence
 
@@ -62,12 +64,14 @@ class BacktestEngine:
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
         run_label: str = "",
+        seed: int | None = None,
     ) -> None:
         self._agent = agent
         self._tickers = tickers
         self._start_date = start_date
         self._end_date = end_date
         self._initial_capital = float(initial_capital)
+        self._initial_margin_requirement = float(initial_margin_requirement)
         self._model_name = model_name
         self._model_provider = model_provider
         self._selected_analysts = selected_analysts
@@ -78,6 +82,8 @@ class BacktestEngine:
         self._request = request
         self._risk_profile = risk_profile
         self._run_label = run_label
+        self._seed = seed
+        self._fingerprint_cache: str | None = None
 
         self._portfolio = Portfolio(
             tickers=tickers,
@@ -91,7 +97,7 @@ class BacktestEngine:
         # Benchmark calculator
         self._benchmark = BenchmarkCalculator()
 
-        self._exec_date = datetime.now().strftime("%Y-%m-%d")
+        self._exec_date = datetime.now().strftime("%Y-%m-%d-%H%M%S")
 
         self._portfolio_values: list[PortfolioValuePoint] = []
         self._table_rows: list[list] = []
@@ -178,10 +184,34 @@ class BacktestEngine:
     def get_benchmark(self) -> BenchmarkCalculator:
         return self._benchmark
 
+    def _config_fingerprint(self) -> str:
+        if self._fingerprint_cache is not None:
+            return self._fingerprint_cache
+        payload = {
+            "tickers": sorted(self._tickers),
+            "start_date": self._start_date,
+            "end_date": self._end_date,
+            "initial_capital": self._initial_capital,
+            "model_name": self._model_name,
+            "model_provider": self._model_provider,
+            "selected_analysts": sorted(self._selected_analysts) if self._selected_analysts is not None else None,
+            "initial_margin_requirement": self._initial_margin_requirement,
+            "llm_temperature": self._llm_temperature,
+            "use_regime_selection": self._use_regime_selection,
+            "use_conviction_weights": self._use_conviction_weights,
+            "risk_profile": self._risk_profile.name if self._risk_profile is not None else None,
+            "seed": self._seed,
+        }
+        raw = json.dumps(payload, sort_keys=True)
+        self._fingerprint_cache = hashlib.sha256(raw.encode()).hexdigest()[:8]
+        return self._fingerprint_cache
+
     @property
     def run_id(self) -> str:
         base = f"{self._exec_date}-{'-'.join(self._tickers)}-{self._start_date}-{self._end_date}"
-        return f"{base}-{self._run_label}" if self._run_label else base
+        if self._run_label:
+            base = f"{base}-{self._run_label}"
+        return f"{base}-{self._config_fingerprint()}"
 
     def run_backtest(self) -> PerformanceMetrics:
         if self._risk_profile is not None:
