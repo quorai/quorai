@@ -3,5 +3,30 @@
     "display_name": "Gemini 2.5 Flash Lite (OpenRouter)",
     "model_name": "google/gemini-2.5-flash-lite",
     "provider": "OpenRouter"
+  },
+  {
+    "display_name": "Qwen 2.5 14B (Local)",
+    "model_name": "qwen2.5:14b",
+    "provider": "Local"
+  },
+  {
+    "display_name": "Qwen 2.5 7B (Local)",
+    "model_name": "qwen2.5:7b",
+    "provider": "Local"
+  },
+  {
+    "display_name": "Llama 3.1 8B (Local)",
+    "model_name": "llama3.1:8b",
+    "provider": "Local"
+  },
+  {
+    "display_name": "DeepSeek R1 7B (Local)",
+    "model_name": "deepseek-r1:7b",
+    "provider": "Local"
+  },
+  {
+    "display_name": "Granite 4.1 3B (Local)",
+    "model_name": "granite4.1:3b",
+    "provider": "Local"
   }
 ]

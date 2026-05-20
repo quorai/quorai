@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import random
+import re
 import sqlite3
 import threading
 import time
@@ -237,7 +238,13 @@ def call_llm(
         meta = state.get("metadata", {})
         llm_temperature = meta.get("llm_temperature")
         if llm_temperature is not None:
-            llm = llm.bind(temperature=llm_temperature)
+            if model_provider.upper() == "LOCAL":
+                # ChatOllama routes temperature through options_dict (self.temperature),
+                # not as a top-level invoke kwarg — bind() bypasses that path and causes
+                # ollama.Client.chat() to reject it as an unknown argument.
+                llm = llm.model_copy(update={"temperature": float(llm_temperature)})
+            else:
+                llm = llm.bind(temperature=llm_temperature)
 
     # Three-tier structured output dispatch:
     #   1. Anthropic / OpenAI — provider enforces the schema server-side (tool_use / json_schema)
@@ -287,7 +294,8 @@ def call_llm(
 
             _attach_cache_control(invoke_prompt, model_name, model_provider)
 
-            _rate_limiter.acquire()
+            if model_provider.upper() != "LOCAL":
+                _rate_limiter.acquire()
             with _llm_semaphore:
                 result = llm.invoke(invoke_prompt, config={"callbacks": [_capture]})
 
@@ -427,8 +435,44 @@ def extract_json_from_response(content: str) -> dict | None:
         except (json.JSONDecodeError, ValueError):
             pass
 
+    # Last resort: regex field extraction for local-LLM anti-pattern where bullet-point
+    # lines are emitted as stray JSON keys instead of staying inside the reasoning string.
+    result = _regex_field_extract(stripped)
+    if result is not None:
+        return result
+
     logger.warning("extract_json_from_response: could not parse JSON from response (first 500 chars): %r", content[:500])
     return None
+
+
+def _regex_field_extract(content: str) -> dict | None:
+    """Regex-based last-resort extraction for severely malformed JSON.
+
+    Handles the local-LLM anti-pattern:
+      "reasoning": "- bullet one;",
+      "- bullet two": "...",   ← stray key
+    by gathering the primary reasoning value plus any subsequent bullet-like keys.
+    """
+    result: dict = {}
+
+    m = re.search(r'"signal"\s*:\s*"(bullish|bearish|neutral)"', content, re.IGNORECASE)
+    if m:
+        result["signal"] = m.group(1).lower()
+
+    m = re.search(r'"confidence"\s*:\s*(\d+)', content)
+    if m:
+        result["confidence"] = int(m.group(1))
+
+    reasoning_parts: list[str] = []
+    m = re.search(r'"reasoning"\s*:\s*"([^"]*)"', content)
+    if m:
+        reasoning_parts.append(m.group(1))
+    for m in re.finditer(r'"(-\s[^"]+)"\s*:', content):
+        reasoning_parts.append(m.group(1))
+    if reasoning_parts:
+        result["reasoning"] = "\n".join(reasoning_parts)
+
+    return result if len(result) >= 2 else None
 
 
 def get_agent_model_config(state, agent_name):

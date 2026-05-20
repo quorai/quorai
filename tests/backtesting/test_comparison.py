@@ -70,7 +70,7 @@ def test_run_id_slug_normalises_label():
 
 def test_runconfig_uses_settings_model():
     """RunConfig.model_name / model_provider must reflect Settings, not hardcoded values."""
-    from src.config import Settings, get_settings
+    from src.config import Settings
 
     custom_settings = Settings(DEFAULT_MODEL="custom/model-v1", DEFAULT_PROVIDER="CustomProvider")
 

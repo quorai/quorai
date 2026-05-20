@@ -121,6 +121,10 @@ def parallel_analysts_node(state: AgentState) -> dict:
     selected = state["metadata"].get("selected_analysts") or list(ANALYST_CONFIG.keys())
     analyst_nodes_map = get_analyst_nodes()
     max_workers = int(os.environ.get("QUORAI_PARALLEL_ANALYSTS", "8"))
+    # Ollama is a single-process inference server — concurrent requests queue up rather than
+    # execute in parallel. Serialise analysts to eliminate the queueing overhead.
+    if state["metadata"].get("model_provider") == "Local":
+        max_workers = 1
 
     funcs = [(key, analyst_nodes_map[key][1]) for key in selected if key in analyst_nodes_map]
 

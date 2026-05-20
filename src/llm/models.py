@@ -10,6 +10,7 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_gigachat import GigaChat
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain_xai import ChatXAI
 from pydantic import BaseModel
@@ -37,6 +38,7 @@ class ModelProvider(str, Enum):
     GIGACHAT = "GigaChat"
     AZURE_OPENAI = "Azure OpenAI"
     XAI = "xAI"
+    LOCAL = "Local"
 
 
 class LLMModel(BaseModel):
@@ -62,6 +64,8 @@ class LLMModel(BaseModel):
         """Check if the model supports JSON mode"""
         if self.provider == ModelProvider.OPENROUTER:
             return True  # OpenRouter normalises response_format for all routed models
+        if self.provider == ModelProvider.LOCAL:
+            return get_settings().LOCAL_JSON_MODE
         if self.is_deepseek() or self.is_gemini():
             return False
         return True
@@ -157,6 +161,8 @@ def check_provider_api_key(model_provider: str, api_keys: dict | None = None) ->
     elif p == ModelProvider.AZURE_OPENAI.value.upper():
         if not cfg.AZURE_OPENAI_API_KEY:
             raise ValueError("Missing AZURE_OPENAI_API_KEY — set it in .env")
+    elif p == ModelProvider.LOCAL.value.upper():
+        pass  # local servers don't require an API key
     # GigaChat and unknown providers are skipped (GigaChat uses user/password auth).
 
 
@@ -258,5 +264,17 @@ def _build_model(model_name: str, model_provider: ModelProvider, api_keys: dict 
             logger.warning("Azure Deployment Name Error: Please make sure AZURE_OPENAI_DEPLOYMENT_NAME is set in your .env file.")
             raise ValueError("Azure OpenAI deployment name not found.  Please make sure AZURE_OPENAI_DEPLOYMENT_NAME is set in your .env file.")
         return AzureChatOpenAI(azure_endpoint=azure_endpoint, azure_deployment=azure_deployment_name, api_key=api_key, api_version="2024-10-21", timeout=_LLM_REQUEST_TIMEOUT)
+    elif model_provider == ModelProvider.LOCAL:
+        cfg = get_settings()
+        # Strip any /v1 suffix — ChatOllama talks to the native Ollama endpoint, not the OpenAI-compat shim.
+        base_url = cfg.LOCAL_BASE_URL.removesuffix("/v1")
+        return ChatOllama(
+            model=model_name,
+            base_url=base_url,
+            temperature=0,
+            num_ctx=cfg.LOCAL_NUM_CTX,
+            num_predict=cfg.LOCAL_NUM_PREDICT,
+            keep_alive=cfg.LOCAL_KEEP_ALIVE,
+        )
     else:
         raise ValueError(f"Unsupported model provider: {model_provider}. Supported providers: {', '.join(p.value for p in ModelProvider)}")

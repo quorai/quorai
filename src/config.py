@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     DEFAULT_MODEL: str = "deepseek/deepseek-v4-flash"
     DEFAULT_PROVIDER: str = "OpenRouter"
 
+    # Local / Ollama
+    LOCAL_BASE_URL: str = "http://localhost:11434/v1"  # OpenAI-compat endpoint (legacy/fallback)
+    LOCAL_API_KEY: str = "ollama"  # any non-empty string; Ollama requires a bearer token
+    LOCAL_JSON_MODE: bool = False  # set True for capable 14B+ models that honour response_format
+    LOCAL_NUM_CTX: int = 16384  # KV-cache size; 16384 is comfortable on Apple Silicon for 3B-8B models
+    LOCAL_NUM_PREDICT: int = 1024  # max tokens to generate per call
+    LOCAL_KEEP_ALIVE: str = "1h"  # keep model resident in VRAM; prevents per-call reload stalls
+
     # Risk gate caps (used by Phase 4)
     MAX_ORDER_NOTIONAL: float = 10_000.0
     MAX_ORDER_QTY: float = 1_000.0
