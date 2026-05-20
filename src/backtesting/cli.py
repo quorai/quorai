@@ -60,6 +60,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--use-regime-selection", action="store_true", dest="use_regime_selection", help="Narrow analyst set by daily SPY regime")
     parser.add_argument("--use-conviction-weights", action="store_true", dest="use_conviction_weights", help="Weight agents by rolling hit-rate (requires weights.json)")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility (default: 42)")
+    parser.add_argument("--run-label", type=str, default="", dest="run_label", help="Tag for this run (embedded in run_id and manifest for later filtering)")
+    parser.add_argument("--log-dir", type=str, default=None, dest="log_dir", help="Override artifact directory (default: logs/backtest)")
     add_risk_profile_arg(parser)
 
 
@@ -179,6 +181,8 @@ def _main_run(argv: list[str]) -> int:
         use_conviction_weights=args.use_conviction_weights,
         risk_profile=get_profile(args.risk_profile),
         seed=args.seed,
+        run_label=args.run_label,
+        log_dir=args.log_dir,
     )
 
     cli_args_record = {"argv": sys.argv[:], "parsed": vars(args)}
@@ -237,7 +241,7 @@ def _main_run(argv: list[str]) -> int:
         patch: dict = {"cli_args": cli_args_record}
         if result_record is not None:
             patch["result"] = result_record
-        update_run_manifest(engine.run_id, patch, log_dir="logs/backtest")
+        update_run_manifest(engine.run_id, patch, log_dir=args.log_dir or "logs/backtest")
 
     return 0
 

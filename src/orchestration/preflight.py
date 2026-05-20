@@ -182,9 +182,10 @@ class PipelineContext:
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
         log_dir: str = "logs",
+        effective_log_dir: str | None = None,
     ) -> PipelineContext:
         """Create a PipelineContext, loading weights and opening the signal logger."""
-        effective_log_dir = str(Path(log_dir) / mode)
+        effective_log_dir = effective_log_dir or str(Path(log_dir) / mode)
 
         conviction_weights: dict[str, float] = {}
         if use_conviction_weights:

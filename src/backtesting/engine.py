@@ -65,6 +65,7 @@ class BacktestEngine:
         risk_profile: RiskProfile | None = None,
         run_label: str = "",
         seed: int | None = None,
+        log_dir: str | None = None,
     ) -> None:
         self._agent = agent
         self._tickers = tickers
@@ -83,6 +84,7 @@ class BacktestEngine:
         self._risk_profile = risk_profile
         self._run_label = run_label
         self._seed = seed
+        self._log_dir = log_dir
         self._fingerprint_cache: str | None = None
 
         self._portfolio = Portfolio(
@@ -249,6 +251,7 @@ class BacktestEngine:
                     use_conviction_weights=self._use_conviction_weights,
                     request=self._request,
                     risk_profile=self._risk_profile,
+                    effective_log_dir=self._log_dir,
                 ) as ctx,
                 progress.display(),
             ):
