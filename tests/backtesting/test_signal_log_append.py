@@ -18,7 +18,7 @@ def test_second_open_appends_not_truncates(tmp_path):
     logger2.log_day("2024-01-02", signals, prices)
     logger2.close()
 
-    lines = [ln for ln in (tmp_path / f"signals-{run_id}.jsonl").read_text().splitlines() if ln.strip()]
+    lines = [ln for ln in (tmp_path / "signals" / f"signals-{run_id}.jsonl").read_text().splitlines() if ln.strip()]
     assert len(lines) == 2, f"Expected 2 records (one per cycle), got {len(lines)}"
     import json
 

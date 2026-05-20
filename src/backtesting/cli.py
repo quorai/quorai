@@ -10,6 +10,7 @@ from colorama import Fore, Style, init
 from src.cli.input import add_risk_profile_arg, parse_tickers, select_model
 from src.llm.models import check_provider_api_key
 from src.main import run_quorai
+from src.orchestration.preflight import update_run_manifest
 from src.risk_profiles import get_profile
 from src.utils.analysts import ALL_ANALYST_KEYS
 from src.utils.tz import now_ny
@@ -79,32 +80,30 @@ def _resolve_analysts(args: argparse.Namespace) -> list[str]:
     return ALL_ANALYST_KEYS
 
 
-def _print_baselines(engine: "BacktestEngine", tickers: list[str], start_date: str, end_date: str) -> None:
+def _compute_baselines(engine: "BacktestEngine", tickers: list[str], start_date: str, end_date: str) -> dict:
     bm = engine.get_benchmark()
-    print(f"\n{Fore.WHITE}{Style.BRIGHT}BASELINES ({start_date} → {end_date}){Style.RESET_ALL}")
+    spy_ret = bm.get_return_pct("SPY", start_date, end_date)
+    ticker_rets: dict[str, float | None] = {t: bm.get_return_pct(t, start_date, end_date) for t in tickers}
+    valid = [r for r in ticker_rets.values() if r is not None]
+    basket_ret: float | None = sum(valid) / len(valid) if valid else None
+    return {"spy_return_pct": spy_ret, "tickers": ticker_rets, "equal_weight_basket_return_pct": basket_ret}
 
+
+def _print_baselines(baselines: dict, tickers: list[str], start_date: str, end_date: str) -> None:
     def _fmt(ret: float | None) -> str:
         if ret is None:
             return "N/A"
         color = Fore.GREEN if ret >= 0 else Fore.RED
         return f"{color}{ret:.2f}%{Style.RESET_ALL}"
 
-    spy_ret = bm.get_return_pct("SPY", start_date, end_date)
-    print(f"  SPY:                  {_fmt(spy_ret)}")
+    print(f"\n{Fore.WHITE}{Style.BRIGHT}BASELINES ({start_date} → {end_date}){Style.RESET_ALL}")
+    print(f"  SPY:                  {_fmt(baselines['spy_return_pct'])}")
 
-    ticker_rets: list[float] = []
     for t in tickers:
-        ret = bm.get_return_pct(t, start_date, end_date)
-        print(f"  {t}:{'':>{max(0, 18 - len(t))}}{_fmt(ret)}")
-        if ret is not None:
-            ticker_rets.append(ret)
+        print(f"  {t}:{'':>{max(0, 18 - len(t))}}{_fmt(baselines['tickers'].get(t))}")
 
-    if ticker_rets:
-        basket_ret: float | None = sum(ticker_rets) / len(ticker_rets)
-    else:
-        basket_ret = None
     label = f"Equal-weight ({','.join(tickers)})"
-    print(f"  {label}:  {_fmt(basket_ret)}")
+    print(f"  {label}:  {_fmt(baselines['equal_weight_basket_return_pct'])}")
 
 
 def _main_run(argv: list[str]) -> int:
@@ -153,27 +152,43 @@ def _main_run(argv: list[str]) -> int:
         risk_profile=get_profile(args.risk_profile),
     )
 
-    metrics = engine.run_backtest()
-    values = engine.get_portfolio_values()
+    cli_args_record = {"argv": sys.argv[:], "parsed": vars(args)}
+    result_record: dict | None = None
+    try:
+        metrics = engine.run_backtest()
+        values = engine.get_portfolio_values()
 
-    if values:
-        print(f"\n{Fore.WHITE}{Style.BRIGHT}ENGINE RUN COMPLETE{Style.RESET_ALL}")
-        last_value = values[-1]["Portfolio Value"]
-        start_value = values[0]["Portfolio Value"]
-        total_return = (last_value / start_value - 1.0) * 100.0 if start_value else 0.0
-        print(f"Total Return: {Fore.GREEN if total_return >= 0 else Fore.RED}{total_return:.2f}%{Style.RESET_ALL}")
-    if metrics.get("sharpe_ratio") is not None:
-        print(f"Sharpe: {metrics['sharpe_ratio']:.2f}")
-    if metrics.get("sortino_ratio") is not None:
-        print(f"Sortino: {metrics['sortino_ratio']:.2f}")
-    if metrics.get("max_drawdown") is not None:
-        md = abs(metrics["max_drawdown"]) if metrics["max_drawdown"] is not None else 0.0
-        if metrics.get("max_drawdown_date"):
-            print(f"Max DD: {md:.2f}% on {metrics['max_drawdown_date']}")
-        else:
-            print(f"Max DD: {md:.2f}%")
+        if values:
+            print(f"\n{Fore.WHITE}{Style.BRIGHT}ENGINE RUN COMPLETE{Style.RESET_ALL}")
+            last_value = values[-1]["Portfolio Value"]
+            start_value = values[0]["Portfolio Value"]
+            total_return = (last_value / start_value - 1.0) * 100.0 if start_value else 0.0
+            print(f"Total Return: {Fore.GREEN if total_return >= 0 else Fore.RED}{total_return:.2f}%{Style.RESET_ALL}")
 
-    _print_baselines(engine, tickers, start_date, end_date)
+        if metrics.get("sharpe_ratio") is not None:
+            print(f"Sharpe: {metrics['sharpe_ratio']:.2f}")
+        if metrics.get("sortino_ratio") is not None:
+            print(f"Sortino: {metrics['sortino_ratio']:.2f}")
+        if metrics.get("max_drawdown") is not None:
+            md = abs(metrics["max_drawdown"]) if metrics["max_drawdown"] is not None else 0.0
+            if metrics.get("max_drawdown_date"):
+                print(f"Max DD: {md:.2f}% on {metrics['max_drawdown_date']}")
+            else:
+                print(f"Max DD: {md:.2f}%")
+
+        baselines = _compute_baselines(engine, tickers, start_date, end_date)
+        _print_baselines(baselines, tickers, start_date, end_date)
+
+        result_record = {"metrics": dict(metrics), "baselines": baselines}
+        if values:
+            result_record["total_return_pct"] = total_return
+            result_record["initial_portfolio_value"] = start_value
+            result_record["final_portfolio_value"] = last_value
+    finally:
+        patch: dict = {"cli_args": cli_args_record}
+        if result_record is not None:
+            patch["result"] = result_record
+        update_run_manifest(engine.run_id, patch, log_dir="logs/backtest")
 
     return 0
 

@@ -11,7 +11,7 @@ def test_record_creates_jsonl(tmp_path):
     journal = AuditJournal(log_dir=str(tmp_path))
     journal.record(ticker="AAPL", action="buy", qty=1.5, side="buy", status="submitted", order_id="abc123")
 
-    log_file = tmp_path / f"trades-{date.today()}.jsonl"
+    log_file = tmp_path / "trades" / f"trades-{date.today()}.jsonl"
     assert log_file.exists()
     entry = json.loads(log_file.read_text().strip())
     assert entry["ticker"] == "AAPL"
@@ -26,7 +26,7 @@ def test_record_appends_multiple_lines(tmp_path):
     journal.record(ticker="AAPL", action="buy", qty=1.0, side="buy", status="submitted")
     journal.record(ticker="MSFT", action="sell", qty=2.0, side="sell", status="rejected", reason="kill_switch_active")
 
-    log_file = tmp_path / f"trades-{date.today()}.jsonl"
+    log_file = tmp_path / "trades" / f"trades-{date.today()}.jsonl"
     lines = log_file.read_text().strip().split("\n")
     assert len(lines) == 2
     second = json.loads(lines[1])
@@ -38,7 +38,7 @@ def test_record_custom_timestamp(tmp_path):
     journal = AuditJournal(log_dir=str(tmp_path))
     journal.record(ticker="NVDA", action="short", qty=10.0, side="sell", status="rejected", timestamp="2026-01-01T00:00:00+00:00")
 
-    log_file = tmp_path / f"trades-{date.today()}.jsonl"
+    log_file = tmp_path / "trades" / f"trades-{date.today()}.jsonl"
     entry = json.loads(log_file.read_text().strip())
     assert entry["timestamp"] == "2026-01-01T00:00:00+00:00"
 
@@ -73,7 +73,7 @@ def test_list_submitted_today_skips_malformed_lines(tmp_path):
     journal.record(ticker="AAPL", action="buy", qty=1.0, side="buy", status="submitted")
     journal.record(ticker="MSFT", action="buy", qty=2.0, side="buy", status="submitted")
 
-    log_file = tmp_path / f"trades-{date.today()}.jsonl"
+    log_file = tmp_path / "trades" / f"trades-{date.today()}.jsonl"
     lines = log_file.read_text().strip().split("\n")
     lines.insert(1, "{not-valid-json")
     log_file.write_text("\n".join(lines) + "\n")

@@ -1,7 +1,7 @@
 import json
 
 from src.backtesting.portfolio import Portfolio
-from src.orchestration.preflight import PipelineContext
+from src.orchestration.preflight import PipelineContext, update_run_manifest
 
 
 def _make_ctx(log_dir: str) -> PipelineContext:
@@ -71,3 +71,24 @@ def test_finalize_cycle_noop_when_no_bundle(tmp_path):
         executed_trades={"AAPL": 10.0},
         portfolio_after=portfolio,
     )
+
+
+def test_update_run_manifest_merges_patch(tmp_path):
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    manifest_path = runs_dir / "test-run.json"
+    manifest_path.write_text(json.dumps({"run_id": "test-run", "status": "completed", "inputs": {"tickers": ["AAPL"]}}))
+
+    update_run_manifest("test-run", {"cli_args": {"argv": ["--tickers", "AAPL"], "parsed": {"seed": 42}}, "result": {"total_return_pct": 5.0}}, log_dir=str(tmp_path))
+
+    updated = json.loads(manifest_path.read_text())
+    assert updated["run_id"] == "test-run"
+    assert updated["status"] == "completed"
+    assert updated["inputs"]["tickers"] == ["AAPL"]
+    assert updated["cli_args"]["parsed"]["seed"] == 42
+    assert updated["result"]["total_return_pct"] == 5.0
+
+
+def test_update_run_manifest_noop_when_missing(tmp_path):
+    # Should not raise even when the manifest file does not exist.
+    update_run_manifest("nonexistent-run", {"cli_args": {}}, log_dir=str(tmp_path))

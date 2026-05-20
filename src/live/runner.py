@@ -104,26 +104,27 @@ class LiveRunner:
         if not raw_equity:
             raise RuntimeError(f"[runner] Alpaca returned no equity value: account={account!r}")
         account_equity = float(raw_equity)
-        sod = load_sod_equity()
+        _live_log_dir = "logs/live"
+        sod = load_sod_equity(log_dir=_live_log_dir)
         if sod is None:
             if self.dry_run:
                 sod = account_equity
             elif self._catch_up:
                 today = now_ny().date()
                 sod = self._broker.get_sod_equity(today)
-                save_sod_equity(sod, allow_intraday=True)
+                save_sod_equity(sod, log_dir=_live_log_dir, allow_intraday=True)
                 logger.info("[runner] catch-up: SOD equity backfilled from broker history: %.2f", sod)
             else:
                 now = now_ny()
                 market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
                 if now < market_open:
-                    save_sod_equity(account_equity)
+                    save_sod_equity(account_equity, log_dir=_live_log_dir)
                 else:
                     logger.warning(
                         "[runner] No SOD equity found post-open; using current equity=%.2f as baseline",
                         account_equity,
                     )
-                    save_sod_equity(account_equity, allow_intraday=True)
+                    save_sod_equity(account_equity, log_dir=_live_log_dir, allow_intraday=True)
                 sod = account_equity
         self._sod_equity = sod
 
@@ -153,7 +154,7 @@ class LiveRunner:
         with PipelineContext.build(
             agent=run_quorai,
             tickers=self.tickers,
-            run_id=f"live-{end_date}",
+            run_id=f"{end_date}-live",
             mode="live",
             model_name=self.model_name,
             model_provider=self.model_provider,

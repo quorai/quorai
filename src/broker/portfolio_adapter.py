@@ -18,7 +18,7 @@ def to_snapshot(
 
     Note: ``realized_gains`` is always zero-filled. The Alpaca positions API does
     not expose session-realized P&L. For closed-position attribution, consult the
-    ``AuditJournal`` (``logs/trades-<date>.jsonl``).
+    ``AuditJournal`` (``logs/live/trades/trades-<date>.jsonl``).
     """
     """Convert Alpaca account + positions into a PortfolioSnapshot."""
     position_map: dict[str, PositionState] = {}
@@ -71,7 +71,7 @@ def to_snapshot(
             now_zero = now_state is None or (now_state["long"] == 0.0 and now_state["short"] == 0.0)
             if had_position and now_zero:
                 logger.warning(
-                    "[portfolio_adapter] %s position closed — realized P&L not available from Alpaca; consult AuditJournal (logs/trades-*.jsonl) for attribution",
+                    "[portfolio_adapter] %s position closed — realized P&L not available from Alpaca; consult AuditJournal (logs/live/trades/trades-*.jsonl) for attribution",
                     tkr,
                 )
 

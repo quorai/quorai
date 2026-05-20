@@ -38,7 +38,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--show-reasoning", action="store_true", dest="show_reasoning", help="Print each agent's reasoning and the debate summaries")
     parser.add_argument("--use-regime-selection", action="store_true", dest="use_regime_selection", help="Narrow analysts to the regime-appropriate set using SPY market data")
     parser.add_argument("--use-conviction-weights", action="store_true", dest="use_conviction_weights", help="Apply per-agent conviction weights from src/feedback/weights.json (requires prior backtest run with signal log)")
-    parser.add_argument("--no-signal-log", action="store_false", dest="enable_signal_log", help="Disable writing the per-agent signal JSONL (logs/signals-live-YYYY-MM-DD.jsonl)")
+    parser.add_argument("--no-signal-log", action="store_false", dest="enable_signal_log", help="Disable writing the per-agent signal JSONL (logs/live/signals/signals-YYYY-MM-DD-live.jsonl)")
     parser.set_defaults(enable_signal_log=True)
     parser.add_argument(
         "--agent-model",
@@ -122,7 +122,7 @@ def main() -> None:
     log = logging.getLogger(__name__)
     log.info("Risk profile: %s (base_limit=%.2f, notional_cap=$%.0f)", profile.name, profile.base_limit, profile.max_order_notional)
     broker = AlpacaClient()
-    journal = AuditJournal()
+    journal = AuditJournal(log_dir="logs/live")
     risk_gate = RiskGate(settings=settings, journal=journal)
 
     from src.live.idempotency_guard import (

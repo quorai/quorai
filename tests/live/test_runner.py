@@ -65,7 +65,7 @@ def test_prepare_calls_to_snapshot_and_run_cycle(mock_pipeline_cls, mock_to_snap
 
     mock_to_snapshot.assert_called_once()
     ctx.run_cycle.assert_called_once()
-    mock_save.assert_called_once_with(float(broker.get_account.return_value.equity))
+    mock_save.assert_called_once_with(float(broker.get_account.return_value.equity), log_dir="logs/live")
     assert "AAPL" in decisions
 
 
@@ -83,7 +83,7 @@ def test_sod_equity_saved_on_first_run(mock_pipeline_cls, mock_to_snapshot):
          patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
         runner.prepare()
 
-    mock_save.assert_called_once_with(95_000.0)
+    mock_save.assert_called_once_with(95_000.0, log_dir="logs/live")
     assert runner._sod_equity == 95_000.0
 
 
@@ -136,7 +136,7 @@ def test_catch_up_fetches_sod_from_broker_history(mock_pipeline_cls, mock_to_sna
         runner.prepare()
 
     broker.get_sod_equity.assert_called_once()
-    mock_save.assert_called_once_with(100_000.0, allow_intraday=True)
+    mock_save.assert_called_once_with(100_000.0, log_dir="logs/live", allow_intraday=True)
     assert runner._sod_equity == 100_000.0
 
 
@@ -155,5 +155,5 @@ def test_prepare_post_open_falls_back_gracefully(mock_pipeline_cls, mock_to_snap
          patch("src.live.runner.now_ny", return_value=_POST_OPEN):
         runner.prepare()
 
-    mock_save.assert_called_once_with(92_000.0, allow_intraday=True)
+    mock_save.assert_called_once_with(92_000.0, log_dir="logs/live", allow_intraday=True)
     assert runner._sod_equity == 92_000.0

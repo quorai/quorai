@@ -91,6 +91,8 @@ class BacktestEngine:
         # Benchmark calculator
         self._benchmark = BenchmarkCalculator()
 
+        self._exec_date = datetime.now().strftime("%Y-%m-%d")
+
         self._portfolio_values: list[PortfolioValuePoint] = []
         self._table_rows: list[list] = []
         self._performance_metrics: PerformanceMetrics = {
@@ -178,7 +180,7 @@ class BacktestEngine:
 
     @property
     def run_id(self) -> str:
-        base = f"{'-'.join(self._tickers)}-{self._start_date}-{self._end_date}"
+        base = f"{self._exec_date}-{'-'.join(self._tickers)}-{self._start_date}-{self._end_date}"
         return f"{base}-{self._run_label}" if self._run_label else base
 
     def run_backtest(self) -> PerformanceMetrics:

@@ -172,5 +172,5 @@ class AlpacaClient:
         req = GetPortfolioHistoryRequest(period="1D", timeframe="1H", date_end=date)
         history = _retry_api_call(self._client.get_portfolio_history, history_filter=req)
         if history.base_value is None:
-            raise RuntimeError(f"Alpaca returned no base_value for portfolio history on {date} — cannot establish SOD equity; create logs/sod-equity-<date>.json manually")
+            raise RuntimeError(f"Alpaca returned no base_value for portfolio history on {date} — cannot establish SOD equity; create logs/live/sod-equity/sod-equity-{date}.json manually")
         return float(history.base_value)

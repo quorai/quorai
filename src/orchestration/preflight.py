@@ -77,6 +77,20 @@ def _atomic_json_write(path: Path, obj: object) -> None:
         raise
 
 
+def update_run_manifest(run_id: str, patch: dict, log_dir: str = "logs") -> None:
+    """Shallow-merge *patch* into logs/runs/<run_id>.json atomically. No-op if manifest is absent."""
+    manifest_path = Path(log_dir) / "runs" / f"{run_id}.json"
+    if not manifest_path.exists():
+        return
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        manifest.update(patch)
+        _atomic_json_write(manifest_path, manifest)
+    except Exception:
+        logger.exception("Failed to update run manifest for run=%s", run_id)
+
+
 class PipelineContext:
     """Stable per-run orchestration state shared by live and backtest flows.
 
@@ -170,6 +184,8 @@ class PipelineContext:
         log_dir: str = "logs",
     ) -> PipelineContext:
         """Create a PipelineContext, loading weights and opening the signal logger."""
+        effective_log_dir = str(Path(log_dir) / mode)
+
         conviction_weights: dict[str, float] = {}
         if use_conviction_weights:
             conviction_weights = load_weights()
@@ -178,7 +194,7 @@ class PipelineContext:
             else:
                 logger.info("Loaded conviction weights for %d agents", len(conviction_weights))
 
-        signal_logger: SignalLogger | None = SignalLogger(run_id, log_dir=log_dir) if enable_signal_log else None
+        signal_logger: SignalLogger | None = SignalLogger(run_id, log_dir=effective_log_dir) if enable_signal_log else None
 
         instance = cls(
             agent=agent,
@@ -196,7 +212,7 @@ class PipelineContext:
             signal_logger=signal_logger,
             request=request,
             risk_profile=risk_profile,
-            log_dir=log_dir,
+            log_dir=effective_log_dir,
         )
         instance._write_run_manifest("running")
         return instance

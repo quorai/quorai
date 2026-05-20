@@ -24,7 +24,7 @@ def test_log_day_writes_correct_records(tmp_path):
     logger.log_day("2024-01-15", analyst_signals, signal_prices)
     logger.close()
 
-    records = [json.loads(line) for line in (tmp_path / "signals-test-run.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (tmp_path / "signals" / "signals-test-run.jsonl").read_text().splitlines()]
     assert len(records) == 3
 
     by_key = {(r["agent_id"], r["ticker"]): r for r in records}
@@ -48,7 +48,7 @@ def test_log_day_missing_price_records_none(tmp_path):
     logger.log_day("2024-01-16", analyst_signals, {})
     logger.close()
 
-    records = [json.loads(line) for line in (tmp_path / "signals-test-run2.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (tmp_path / "signals" / "signals-test-run2.jsonl").read_text().splitlines()]
     assert records[0]["price_at_signal"] is None
 
 
@@ -58,7 +58,7 @@ def test_log_day_missing_confidence_defaults_to_zero(tmp_path):
     logger.log_day("2024-01-17", analyst_signals, {"AAPL": 100.0})
     logger.close()
 
-    records = [json.loads(line) for line in (tmp_path / "signals-test-run3.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (tmp_path / "signals" / "signals-test-run3.jsonl").read_text().splitlines()]
     assert records[0]["confidence"] == pytest.approx(0.0)
 
 

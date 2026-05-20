@@ -38,6 +38,8 @@ def test_run_ids_differ_across_configs():
 
 
 def test_run_id_no_label_omits_suffix():
+    from datetime import datetime
+
     engine = BacktestEngine(
         agent=run_quorai,
         tickers=["AAPL"],
@@ -49,10 +51,13 @@ def test_run_id_no_label_omits_suffix():
         selected_analysts=None,
         initial_margin_requirement=0.0,
     )
-    assert engine.run_id == "AAPL-2024-01-02-2024-01-31"
+    today = datetime.now().strftime("%Y-%m-%d")
+    assert engine.run_id == f"{today}-AAPL-2024-01-02-2024-01-31"
 
 
 def test_run_id_slug_normalises_label():
+    from datetime import datetime
+
     engine = BacktestEngine(
         agent=run_quorai,
         tickers=["AAPL"],
@@ -65,7 +70,8 @@ def test_run_id_slug_normalises_label():
         initial_margin_requirement=0.0,
         run_label="full-analyst-set",
     )
-    assert engine.run_id == "AAPL-2024-01-02-2024-01-31-full-analyst-set"
+    today = datetime.now().strftime("%Y-%m-%d")
+    assert engine.run_id == f"{today}-AAPL-2024-01-02-2024-01-31-full-analyst-set"
 
 
 def test_runconfig_uses_settings_model():

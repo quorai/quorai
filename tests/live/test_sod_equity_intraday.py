@@ -19,7 +19,7 @@ def test_save_before_market_open_succeeds(tmp_path):
     with patch("src.live.sod_equity.now_ny", return_value=pre_open):
         mod.save_sod_equity(100_000.0, log_dir=str(tmp_path))
 
-    files = list(tmp_path.iterdir())
+    files = list((tmp_path / "sod-equity").iterdir())
     assert len(files) == 1
     data = json.loads(files[0].read_text())
     assert data["equity"] == 100_000.0
@@ -69,7 +69,7 @@ def test_allow_intraday_bypasses_guard(tmp_path):
     with patch("src.live.sod_equity.now_ny", return_value=post_open):
         mod.save_sod_equity(100_000.0, log_dir=str(tmp_path), allow_intraday=True)
 
-    files = list(tmp_path.iterdir())
+    files = list((tmp_path / "sod-equity").iterdir())
     assert len(files) == 1
     import json
 

@@ -66,7 +66,7 @@ def test_build_opens_signal_logger(mock_logger_cls, _mock_write):
         model_provider="p",
         enable_signal_log=True,
     )
-    mock_logger_cls.assert_called_once_with("my-run", log_dir="logs")
+    mock_logger_cls.assert_called_once_with("my-run", log_dir="logs/backtest")
     assert ctx.signal_log_path is not None
 
 

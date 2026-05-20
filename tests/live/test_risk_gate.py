@@ -76,7 +76,7 @@ def test_rejection_is_journaled(tmp_path):
     gate = _make_gate(tmp_path, KILL_SWITCH=True)
     _check(gate)
 
-    log_file = tmp_path / f"trades-{date.today()}.jsonl"
+    log_file = tmp_path / "trades" / f"trades-{date.today()}.jsonl"
     assert log_file.exists()
     entry = json.loads(log_file.read_text().strip())
     assert entry["status"] == "rejected"

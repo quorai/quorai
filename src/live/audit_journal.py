@@ -9,14 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 class AuditJournal:
-    def __init__(self, log_dir: str = "logs") -> None:
+    def __init__(self, log_dir: str = "logs/live") -> None:
         self._log_dir = log_dir
         self._lock = threading.Lock()
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(os.path.join(log_dir, "trades"), exist_ok=True)
 
     def _log_path(self) -> str:
         ny_date = now_ny().strftime("%Y-%m-%d")
-        return os.path.join(self._log_dir, f"trades-{ny_date}.jsonl")
+        return os.path.join(self._log_dir, "trades", f"trades-{ny_date}.jsonl")
 
     def record(
         self,

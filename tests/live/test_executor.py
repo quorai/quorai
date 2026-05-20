@@ -134,7 +134,7 @@ def test_order_error_journaled(tmp_path):
     from zoneinfo import ZoneInfo
 
     ny_date = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-    log_file = tmp_path / f"trades-{ny_date}.jsonl"
+    log_file = tmp_path / "trades" / f"trades-{ny_date}.jsonl"
     lines = [json.loads(ln) for ln in log_file.read_text().splitlines() if ln.strip()]
     # Two records: pending (written before submit) + error (written after failure)
     assert lines[0]["status"] == "pending"
