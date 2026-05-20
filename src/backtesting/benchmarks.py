@@ -8,27 +8,28 @@ logger = logging.getLogger(__name__)
 
 
 class BenchmarkCalculator:
-    """Computes benchmark buy-and-hold returns from a pre-loaded price DataFrame.
+    """Computes benchmark buy-and-hold returns from pre-loaded price DataFrames.
 
-    Call `load(df)` once with the full date-range prices before iterating.
+    Call `load(df, ticker)` for each ticker before querying. Defaults to "SPY"
+    so existing call-sites that omit the ticker argument continue to work.
     """
 
     def __init__(self) -> None:
-        self._df: pd.DataFrame = pd.DataFrame()
+        self._dfs: dict[str, pd.DataFrame] = {}
 
-    def load(self, df: pd.DataFrame) -> None:
-        """Store the pre-fetched price data for later lookups."""
-        self._df = df
+    def load(self, df: pd.DataFrame, ticker: str = "SPY") -> None:
+        """Store a pre-fetched price DataFrame under the given ticker key."""
+        self._dfs[ticker] = df
 
     def get_return_pct(self, ticker: str, start_date: str, end_date: str) -> float | None:
         """Compute simple buy-and-hold return % for ticker from start_date to end_date.
 
-        Uses the pre-loaded DataFrame; falls back to None if data is unavailable.
+        Uses the pre-loaded DataFrame for that ticker; returns None if data is unavailable.
         Return is (last_close / first_close - 1) * 100.
         """
         try:
-            df = self._df
-            if df.empty:
+            df = self._dfs.get(ticker)
+            if df is None or df.empty:
                 return None
             # Filter to the requested date window
             mask = (df.index >= start_date) & (df.index <= end_date)

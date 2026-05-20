@@ -165,11 +165,16 @@ class BacktestEngine:
         get_backtest_store().install(store_data, (self._start_date, self._end_date))
 
         spy_df = get_price_data("SPY", self._start_date, self._end_date)
-        self._benchmark.load(spy_df)
+        self._benchmark.load(spy_df, "SPY")
+        for ticker in self._tickers:
+            self._benchmark.load(self._prefetched_prices[ticker], ticker)
         self._spy_prices: pd.DataFrame = spy_df
 
     def get_signal_log_path(self) -> str | None:
         return self._signal_log_path
+
+    def get_benchmark(self) -> BenchmarkCalculator:
+        return self._benchmark
 
     @property
     def run_id(self) -> str:
@@ -197,23 +202,27 @@ class BacktestEngine:
         self._portfolio_values = []
 
         try:
-            with PipelineContext.build(
-                agent=self._agent,
-                tickers=self._tickers,
-                run_id=run_id,
-                mode="backtest",
-                model_name=self._model_name,
-                model_provider=self._model_provider,
-                selected_analysts=self._selected_analysts,
-                llm_temperature=self._llm_temperature,
-                show_reasoning=self._show_reasoning,
-                use_regime_selection=self._use_regime_selection,
-                use_conviction_weights=self._use_conviction_weights,
-                request=self._request,
-                risk_profile=self._risk_profile,
-            ) as ctx, progress.display():
+            with (
+                PipelineContext.build(
+                    agent=self._agent,
+                    tickers=self._tickers,
+                    run_id=run_id,
+                    mode="backtest",
+                    model_name=self._model_name,
+                    model_provider=self._model_provider,
+                    selected_analysts=self._selected_analysts,
+                    llm_temperature=self._llm_temperature,
+                    show_reasoning=self._show_reasoning,
+                    use_regime_selection=self._use_regime_selection,
+                    use_conviction_weights=self._use_conviction_weights,
+                    request=self._request,
+                    risk_profile=self._risk_profile,
+                ) as ctx,
+                progress.display(),
+            ):
                 self._signal_log_path = ctx.signal_log_path
                 from src.orchestration.price_feed import BacktestPriceFeed  # lazy: avoids circular import via package __init__
+
                 price_feed = BacktestPriceFeed(self._prefetched_prices, self._spy_prices)
 
                 for i, current_date in enumerate(dates):
@@ -231,9 +240,7 @@ class BacktestEngine:
 
                     try:
                         # Prices for portfolio valuation use the signal bar's close.
-                        signal_prices: Dict[str, float] = price_feed.get_signal_prices(
-                            self._tickers, current_date_str, lookback_start
-                        )
+                        signal_prices: Dict[str, float] = price_feed.get_signal_prices(self._tickers, current_date_str, lookback_start)
                         if not signal_prices:
                             continue
                         # Prices for trade fills use the next available bar's open.
@@ -324,7 +331,6 @@ class BacktestEngine:
                 self._token_summary_data = ctx.token_summary()
         finally:
             get_backtest_store().uninstall()
-
 
         return self._performance_metrics
 

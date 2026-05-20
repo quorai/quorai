@@ -79,6 +79,34 @@ def _resolve_analysts(args: argparse.Namespace) -> list[str]:
     return ALL_ANALYST_KEYS
 
 
+def _print_baselines(engine: "BacktestEngine", tickers: list[str], start_date: str, end_date: str) -> None:
+    bm = engine.get_benchmark()
+    print(f"\n{Fore.WHITE}{Style.BRIGHT}BASELINES ({start_date} → {end_date}){Style.RESET_ALL}")
+
+    def _fmt(ret: float | None) -> str:
+        if ret is None:
+            return "N/A"
+        color = Fore.GREEN if ret >= 0 else Fore.RED
+        return f"{color}{ret:.2f}%{Style.RESET_ALL}"
+
+    spy_ret = bm.get_return_pct("SPY", start_date, end_date)
+    print(f"  SPY:                  {_fmt(spy_ret)}")
+
+    ticker_rets: list[float] = []
+    for t in tickers:
+        ret = bm.get_return_pct(t, start_date, end_date)
+        print(f"  {t}:{'':>{max(0, 18 - len(t))}}{_fmt(ret)}")
+        if ret is not None:
+            ticker_rets.append(ret)
+
+    if ticker_rets:
+        basket_ret: float | None = sum(ticker_rets) / len(ticker_rets)
+    else:
+        basket_ret = None
+    label = f"Equal-weight ({','.join(tickers)})"
+    print(f"  {label}:  {_fmt(basket_ret)}")
+
+
 def _main_run(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run a single backtest")
     _add_common_args(parser)
@@ -94,10 +122,14 @@ def _main_run(argv: list[str]) -> int:
     import logging
 
     import pandas as pd
+
     _trading_days = len(pd.date_range(start_date, end_date, freq="B"))
     logging.getLogger(__name__).info(
         "Backtest window: %s → %s (%d calendar days, ~%d trading days)",
-        start_date, end_date, args.days, _trading_days,
+        start_date,
+        end_date,
+        args.days,
+        _trading_days,
     )
 
     tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
@@ -140,6 +172,8 @@ def _main_run(argv: list[str]) -> int:
             print(f"Max DD: {md:.2f}% on {metrics['max_drawdown_date']}")
         else:
             print(f"Max DD: {md:.2f}%")
+
+    _print_baselines(engine, tickers, start_date, end_date)
 
     return 0
 
