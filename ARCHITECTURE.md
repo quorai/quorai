@@ -60,14 +60,14 @@ flowchart LR
     PREFLIGHT["PipelineContext\nsrc/orchestration/preflight.py\n(regime + weights + signal log)"]
 
     API["Market data\nsrc/tools/api.py"]
-    CACHE[("Disk cache\n.cache/api_cache.pkl")]
+    CACHE[("Disk cache\n.cache/api_cache.db")]
     LLMU["LLM dispatch\nsrc/llm/models.py\nsrc/utils/llm.py"]
     ENGINE["Backtest engine\nsrc/backtesting/\nengine · controller\nportfolio · trader\nmetrics · benchmarks"]
   end
 
   %% ---------- External ----------
   FINNHUB[("Finnhub API")]
-  LLMPROVIDERS[("LLM providers\nOpenAI · Anthropic · Groq\nDeepSeek · Gemini · xAI\nOpenRouter · Azure · …")]
+  LLMPROVIDERS[("LLM providers\nOpenAI · Anthropic · Groq\nDeepSeek · Gemini · xAI\nOpenRouter · Azure · Ollama · …")]
 
   %% ---------- Connections ----------
   CLI --> GRAPHBUILD
@@ -107,7 +107,7 @@ The graph is built in `src/main.py:create_workflow()` and uses a shared `AgentSt
 `metadata` (merge).
 
 Topology: `start_node` fans out in parallel to every selected analyst. All analysts feed into
-`debate_node`, which aggregates signals into 5 strategy groups and (optionally) applies conviction
+`debate_node`, which aggregates signals into 6 strategy groups and (optionally) applies conviction
 weights. The debate output flows to `risk_management_agent`, then `portfolio_manager`, then `END`.
 Regime selection and conviction-weight loading happen **engine-side** in
 `src/orchestration/preflight.py:PipelineContext` before the graph is invoked.
@@ -133,8 +133,15 @@ written to `state["data"]["analyst_signals"]` and forwarded to the risk manager.
 correlation-adjusted position limits. No LLM call. The per-ticker `base_limit` (default 20% of NAV)
 scales with the active `--risk-profile` preset, read from `state["metadata"]["risk_profile"]`.
 
-**Portfolio manager** (`src/agents/portfolio_manager.py`): aggregates debate group signals, reads
-risk limits, calls the LLM to produce `{action, quantity, confidence, reasoning}` decisions.
+**Portfolio manager** (`src/agents/portfolio_manager.py`): before calling the LLM, runs
+`compute_allowed_actions(tickers, …, regime, group_signals)` to deterministically filter the action
+space. The regime gate rules:
+- `bull_trend` — removes `short` when quant_systematic or growth_and_catalyst group is bullish
+- `bear_trend` — removes `buy` when quant_systematic or quality_compounders group is bearish
+- `risk_off` — removes both `buy` and `short` (only `hold`, `sell`, `cover` permitted)
+
+`cover` and `sell` are never blocked (reducing exposure never fights the trend). The LLM then
+receives the pruned action space and a `regime_instruction` block describing the active regime.
 
 The 25 analysts from `src/utils/analysts.py:ANALYST_CONFIG` (type: "analyst"):
 aswath_damodaran, ben_graham, bill_ackman, cathie_wood, charlie_munger, cliff_asness,
@@ -156,9 +163,29 @@ valuation_analyst, warren_buffett.
 **Functions**: `get_prices`, `get_financial_metrics`, `search_line_items`, `get_insider_trades`,
 `get_company_news`, `get_market_cap`, `get_price_data` (convenience, returns a DataFrame).
 
-**Cache** (`src/data/cache.py`): thread-safe, pickle-backed disk persistence at
-`.cache/api_cache.pkl` (atomic write via tmp + replace). Six per-ticker caches keyed on time
+**Cache** (`src/data/cache.py`): thread-safe, SQLite-backed disk persistence at
+`.cache/api_cache.db` (atomic write via tmp + replace). Six per-ticker caches keyed on time
 fields; a global singleton retrieved via `get_cache()`.
+
+**SEC fundamentals store** (`src/data/sec_store.py`): read-on-demand SQLite store at
+`.cache/sec_fundamentals.db` seeded by `experiments/seed_sec_fundamentals.py`. Stores
+point-in-time XBRL Company Facts from SEC EDGAR and exposes:
+- `SecStore.get_statements(ticker, end_date, periodicity)` — returns annual / quarterly / TTM
+  financial statements accurate as of `end_date` (no look-ahead bias).
+- `SecStore.get_shares_outstanding(ticker, end_date)` — returns shares outstanding as of
+  `end_date`; fixes the yfinance `.info` look-ahead bug where current share counts appear in
+  historical queries.
+
+TTM is computed by summing the trailing four reported quarters; per-share items are treated as
+instantaneous (most-recent-quarter value). When a Q4 filing is missing, Q4 is derived as
+`FY − Q1 − Q2 − Q3`. `fetch_statements()` and `fetch_market_cap()` in
+`src/tools/_yfinance_fundamentals.py` consult `SecStore` first and fall through to yfinance only
+when a ticker is not yet seeded. Seed with:
+
+```bash
+QUORAI_SEC_USER_AGENT="your.email@example.com" \
+  uv run python experiments/seed_sec_fundamentals.py --tickers AAPL,MSFT
+```
 
 **Models** (`src/data/models.py`): Pydantic models — `Price`, `FinancialMetrics` (40+ ratio fields),
 `LineItem` (`extra="allow"` for dynamic XBRL fields), `InsiderTrade`, `CompanyNews`.
@@ -167,9 +194,10 @@ fields; a global singleton retrieved via `get_cache()`.
 
 ### LLM layer
 
-`src/llm/models.py` defines a `ModelProvider` enum with **13 providers**:
-Alibaba, Anthropic, Azure OpenAI, DeepSeek, GigaChat, Google, Groq, Kimi, Meta, Mistral,
-OpenAI, OpenRouter, xAI. The catalog is loaded from `src/llm/api_models.json`.
+`src/llm/models.py` defines a `ModelProvider` enum with **14 providers**:
+Alibaba, Anthropic, Azure OpenAI, DeepSeek, GigaChat, Google, Groq, Kimi, Local (Ollama), Meta,
+Mistral, OpenAI, OpenRouter, xAI. The catalog is loaded from `src/llm/api_models.json`.
+`LOCAL` uses `langchain_ollama.ChatOllama` and requires a running Ollama daemon.
 
 `get_model()` (`src/llm/models.py:122`) returns the appropriate LangChain chat client.
 OpenRouter and Kimi reuse `ChatOpenAI` with a custom `base_url`.
@@ -209,6 +237,22 @@ OpenRouter and Kimi reuse `ChatOpenAI` with a custom `base_url`.
 
 The engine treats `run_quorai` as a black box — the entire graph is rebuilt and invoked once
 per simulated day.
+
+**Performance metrics** (returned by `engine.get_metrics()` and printed in ENGINE RUN COMPLETE):
+Sharpe, Sortino, max drawdown, total return, SPY benchmark return, alpha vs SPY (strategy − SPY
+cumulative return), alpha vs equal-weight ticker basket, and information ratio vs SPY
+(`√252 × mean(active_daily_return) / std(active_daily_return)`).
+
+**Log layout**: backtest artifacts land in `logs/backtest/{cycles,runs,signals}/`, separate from
+live logs in `logs/cycles/` and `logs/runs/`. The `run_id` is prefixed with the execution date and
+a config fingerprint (`YYYY-MM-DD-<hash>`) so runs never overwrite each other. Override the root
+directory with `--log-dir`; tag the run with `--run-label` (embedded in `run_id` and the manifest).
+
+**Evaluation harness** (`experiments/run_scenarios.py`): sweeps 10 curated period × ticker-set
+scenarios spanning BULL/BEAR/RISK_OFF/NEUTRAL regimes, streams subprocess output live, collects
+run manifests, classifies each window's regime via `classify_regime`, and writes a markdown summary
+to `experiments/results/eval-<date>.md`. Supports `--max-tickers` / `--max-days` smoke-test
+truncation and `--no-regime-selection` / `--no-conviction-weights` toggles.
 
 ---
 

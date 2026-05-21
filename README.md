@@ -52,7 +52,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 
 - **25 analyst agents** — value, growth, macro, technical, fundamentals, sentiment, risk, and more
 - **Famous investor personas** — simulations of Buffett, Munger, Ackman, Burry, Wood, Dalio, Simons, Lynch, and others
-- **Multi-provider LLM support** — OpenAI, Anthropic, Groq, Gemini, DeepSeek, xAI, OpenRouter
+- **Multi-provider LLM support** — OpenAI, Anthropic, Groq, Gemini, DeepSeek, xAI, OpenRouter, Ollama (local)
 - **Backtesting engine** — replay historical data with full agent deliberation and portfolio metrics
 - **Live / paper trading** — execute via Alpaca with optional Telegram approval gate
 - **Group-level debate node** — collapses 25 analyst signals into 6 strategy groups via confidence-weighted aggregation; an LLM moderator summarises contested tickers
@@ -63,6 +63,8 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 - **A/B comparison harness** — runs two backtest configs back-to-back and prints a side-by-side metrics table (full-vs-regime analysts, uniform-vs-conviction weights)
 - **Per-agent model routing** — override model and provider per analyst via `--agent-model AGENT=model/PROVIDER`; handled by `RunRequest` (`src/llm/request.py`)
 - **Parallel per-ticker execution** — set `QUORAI_PARALLEL_TICKERS=N` to run N tickers concurrently via a thread pool (`src/utils/concurrency.py`)
+- **SEC EDGAR fundamentals** — point-in-time XBRL data via a local SQLite store (`.cache/sec_fundamentals.db`); eliminates yfinance look-ahead bias on historical share counts and financial statements. Seed with `experiments/seed_sec_fundamentals.py`; falls through to yfinance for unseeded tickers.
+- **Regime-gated allocation** — the portfolio manager deterministically filters proposed LLM actions by the detected SPY regime: `bull_trend` removes `short` when quant/growth groups are bullish; `bear_trend` removes `buy` when quant/quality groups are bearish; `risk_off` blocks both `buy` and `short`
 
 ## How it works
 
@@ -139,6 +141,9 @@ This section documents the quantitative formulas used throughout the codebase. A
 | Max drawdown | `(value_t − max(value_{0..t})) / max(value_{0..t})` — tracked as a running peak |
 | Total return | `(final_value / initial_capital − 1) × 100%` |
 | Benchmark return | `(SPY_last / SPY_first − 1) × 100%` (buy-and-hold over the same window) |
+| Alpha vs SPY | `strategy_total_return − SPY_total_return` |
+| Alpha vs basket | `strategy_total_return − equal_weight_basket_total_return` |
+| Information ratio vs SPY | `√252 × mean(daily_active_return) / std(daily_active_return)` where `active_return = strategy_return − SPY_return` |
 
 ### Portfolio exposure (`src/backtesting/valuation.py`)
 
@@ -268,6 +273,29 @@ OPENROUTER_API_KEY=...
 FINNHUB_API_KEY=...
 ```
 
+### 3. Seed SEC fundamentals (recommended for accurate backtests)
+
+The fundamentals tools consult a local SQLite cache of SEC EDGAR XBRL data before falling back to yfinance. Without this cache yfinance's `.info` returns *current* share counts and financial metrics for historical dates, introducing look-ahead bias in backtests.
+
+```bash
+# Required env var — SEC fair-access policy requires a contact identifier
+export QUORAI_SEC_USER_AGENT="your.email@example.com"
+
+# Seed a specific subset (fast, ~10-30 s)
+uv run python experiments/seed_sec_fundamentals.py --tickers AAPL,MSFT,NVDA
+
+# Seed the full US market (~10 000 tickers, 3-4 hours, 5-10 GB)
+uv run python experiments/seed_sec_fundamentals.py
+
+# Skip tickers last synced within N days
+uv run python experiments/seed_sec_fundamentals.py --refresh-older-than 30
+
+# Dry run — print what would be downloaded without writing
+uv run python experiments/seed_sec_fundamentals.py --dry-run --tickers AAPL
+```
+
+The seeder respects the SEC's 10 req/s rate limit automatically. Tickers not in the cache are silently fetched from yfinance at run-time.
+
 ## Usage
 
 ### Backtesting
@@ -295,8 +323,8 @@ Key flags:
 - `--use-conviction-weights` — weight agents by rolling directional hit-rate (requires `src/feedback/weights.json` from a prior scored run)
 - `--risk-profile` — choose one of five risk presets: `conservative`, `cautious`, `balanced` (default), `aggressive`, `speculative`. Controls per-ticker position sizing and notional/loss-limit caps together.
 - `--agent-model AGENT=model/PROVIDER` — override model for a specific analyst; repeatable; use `*=model/PROVIDER` to override all agents
-
-See [backtest.md](backtest.md) for the full flag reference, programmatic API, model catalog, and complete analyst key list.
+- `--log-dir` — override artifact directory (default: `logs/backtest`)
+- `--run-label` — tag embedded in `run_id` and manifest for later filtering
 
 #### A/B comparison
 
@@ -337,6 +365,10 @@ Total Return: -0.18%
 Sharpe: -2.25
 Sortino: -3.00
 Max DD: 0.74% on 2026-05-08
+SPY Return: +1.12%           ← buy-and-hold SPY over the same window
+Alpha vs SPY: -1.30%         ← strategy total return − SPY total return
+Alpha vs Basket: -0.45%      ← strategy total return − equal-weight ticker basket
+IR vs SPY: -0.83             ← (daily active return mean / std) × √252
 ```
 
 > The Sharpe/Sortino in the final summary may differ slightly from the last rolling figure because the two blocks use marginally different timing for their calculation windows.
@@ -349,6 +381,8 @@ Max DD: 0.74% on 2026-05-08
 | Sharpe Ratio | > 1.0 | 0 – 1.0 | < 0 |
 | Sortino Ratio | > 1.5 | 0 – 1.5 | < 0 |
 | Max Drawdown | < 10% | 10 – 20% | > 20% |
+| Alpha vs SPY | > 0% | ~ 0% | < 0% |
+| IR vs SPY | > 0.5 | 0 – 0.5 | < 0 |
 
 **Important caveats for short backtests**
 
@@ -471,10 +505,12 @@ The paper-only hard-stop in `alpaca_client.py` is the base safety net. Running w
 | `src/broker/` | `Broker` protocol + Alpaca client |
 | `src/live/` | Live executor, runner, risk gate, audit journal |
 | `src/notifications/` | Telegram approval client + command store |
-| `src/data/` | Disk-persisted cache, Pydantic data models |
+| `src/data/` | Disk-persisted cache (`cache.py`), Pydantic data models, SEC EDGAR XBRL store (`sec_store.py`) |
 | `src/llm/` | Multi-provider LLM dispatch, OpenRouter catalog |
 | `src/utils/` | Analyst registry (`ANALYST_CONFIG`), shared helpers |
 | `src/config.py` | Centralised env-var config via pydantic-settings |
+| `experiments/run_scenarios.py` | Regime evaluation harness — sweeps 10 period × ticker-set scenarios and writes a markdown report |
+| `experiments/seed_sec_fundamentals.py` | Seeds `.cache/sec_fundamentals.db` from SEC EDGAR XBRL; requires `QUORAI_SEC_USER_AGENT` |
 | `tests/` | Unit and integration tests |
 
 ## Running tests
