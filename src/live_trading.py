@@ -171,12 +171,12 @@ def main() -> None:
         catch_up=args.catch_up,
     )
 
-    # Pre-flight: skip on non-trading days
+    # Pre-flight: skip when the NYSE session is not currently open (pre-market, post-market, holidays)
     if not broker.is_market_open_today():
         if args.force:
-            logging.getLogger(__name__).warning("Market is closed today — continuing anyway (--force).")
+            logging.getLogger(__name__).warning("Market is not currently open — continuing anyway (--force).")
         else:
-            logging.getLogger(__name__).info("Market is closed today — skipping run.")
+            logging.getLogger(__name__).info("Market is not currently open — skipping run. Use --force to override.")
             return
 
     # Pre-flight: check Telegram command inbox

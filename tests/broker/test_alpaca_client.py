@@ -82,17 +82,22 @@ def test_is_market_open_today_true_when_open():
 
 def test_is_market_open_today_false_pre_market_on_trading_day():
     """
-    Before the fix: is_open=False but next_open.date()==today returned True.
-    After the fix: only clock.is_open matters — returns False pre-market.
+    Pre-market on a trading day (is_open=False, next_open == today) must return False
+    so the live runner does not submit orders before the session opens.
     """
     from datetime import datetime as dt
     from datetime import timezone
 
     client = _make_client()
+    today = dt.now(timezone.utc).date()
     clock = MagicMock()
     clock.is_open = False
+    # Simulate a pre-market scenario: next open is later today.
     clock.next_open = MagicMock()
-    clock.next_open.date.return_value = dt.now(timezone.utc).date()
+    clock.next_open.date.return_value = today
+    # clock.timestamp represents "now" — also today, before open.
+    clock.timestamp = MagicMock()
+    clock.timestamp.date.return_value = today
     client._client.get_clock.return_value = clock
     assert client.is_market_open_today() is False, "Pre-market on a trading day must return False"
 
