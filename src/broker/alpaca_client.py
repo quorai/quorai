@@ -160,8 +160,13 @@ class AlpacaClient:
         return {"status": status, "filled_qty": filled_qty}
 
     def is_market_open_today(self) -> bool:
+        """Return True if today is a NYSE trading day (regardless of current time-of-day)."""
         clock = _retry_api_call(self._client.get_clock)
-        return bool(clock.is_open)
+        if clock.is_open:
+            return True
+        # Market is not open right now; check whether it will open later today.
+        # Both clock.timestamp and clock.next_open are timezone-aware (Eastern).
+        return clock.next_open.date() == clock.timestamp.date()
 
     def get_sod_equity(self, date: date) -> float:
         """Return the prior-close equity for `date`, used as the SOD loss-limit baseline.
