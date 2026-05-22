@@ -102,6 +102,44 @@ def test_is_market_open_today_false_pre_market_on_trading_day():
     assert client.is_market_open_today() is False, "Pre-market on a trading day must return False"
 
 
+def test_is_trading_day_true_when_market_open():
+    client = _make_client()
+    clock = MagicMock()
+    clock.is_open = True
+    client._client.get_clock.return_value = clock
+    assert client.is_trading_day() is True
+
+
+def test_is_trading_day_true_pre_market_on_trading_day():
+    from datetime import datetime as dt
+    from datetime import timezone
+
+    client = _make_client()
+    today = dt.now(timezone.utc).date()
+    clock = MagicMock()
+    clock.is_open = False
+    clock.next_open = MagicMock()
+    clock.next_open.date.return_value = today
+    clock.timestamp = MagicMock()
+    clock.timestamp.date.return_value = today
+    client._client.get_clock.return_value = clock
+    assert client.is_trading_day() is True
+
+
+def test_is_trading_day_false_on_weekend():
+    from datetime import date
+
+    client = _make_client()
+    clock = MagicMock()
+    clock.is_open = False
+    clock.next_open = MagicMock()
+    clock.next_open.date.return_value = date(2026, 5, 25)  # Monday
+    clock.timestamp = MagicMock()
+    clock.timestamp.date.return_value = date(2026, 5, 23)  # Saturday
+    client._client.get_clock.return_value = clock
+    assert client.is_trading_day() is False
+
+
 def test_unknown_side_raises_value_error():
     """RV-10: unrecognised side string raises ValueError instead of silently using SELL."""
     from src.broker.alpaca_client import _resolve_side

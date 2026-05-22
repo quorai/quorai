@@ -168,6 +168,15 @@ class AlpacaClient:
         clock = _retry_api_call(self._client.get_clock)
         return bool(clock.is_open)
 
+    def is_trading_day(self) -> bool:
+        """Return True if today is a NYSE trading day, regardless of time-of-day.
+
+        Useful for --allow-queue flows that want to submit pre-market orders that
+        will queue for the opening cross, while still skipping weekends and holidays.
+        """
+        clock = _retry_api_call(self._client.get_clock)
+        return clock.is_open or (clock.next_open.date() == clock.timestamp.date())
+
     def get_sod_equity(self, date: date) -> float:
         """Return the prior-close equity for `date`, used as the SOD loss-limit baseline.
 

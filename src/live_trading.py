@@ -59,6 +59,16 @@ def _parse_args() -> argparse.Namespace:
     add_risk_profile_arg(parser)
     parser.add_argument("--force", action="store_true", help="Skip market-open check (useful for development/testing)")
     parser.add_argument(
+        "--allow-queue",
+        action="store_true",
+        dest="allow_queue",
+        help=(
+            "Allow running before market open on trading days. Orders are submitted as DAY market orders "
+            "and will queue for the opening cross. Skips reconciliation (no fill confirmation until open). "
+            "Still skips on weekends and holidays."
+        ),
+    )
+    parser.add_argument(
         "--catch-up",
         action="store_true",
         dest="catch_up",
@@ -169,11 +179,16 @@ def main() -> None:
         request=run_request,
         risk_profile=profile,
         catch_up=args.catch_up,
+        allow_queue=args.allow_queue,
     )
 
     # Pre-flight: skip when the NYSE session is not currently open (pre-market, post-market, holidays)
     if not broker.is_market_open_today():
-        if args.force:
+        if args.allow_queue and broker.is_trading_day():
+            logging.getLogger(__name__).info(
+                "Market not yet open — orders will be queued for the opening cross (--allow-queue)."
+            )
+        elif args.force:
             logging.getLogger(__name__).warning("Market is not currently open — continuing anyway (--force).")
         else:
             logging.getLogger(__name__).info("Market is not currently open — skipping run. Use --force to override.")

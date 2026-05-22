@@ -140,6 +140,49 @@ def test_catch_up_fetches_sod_from_broker_history(mock_pipeline_cls, mock_to_sna
     assert runner._sod_equity == 100_000.0
 
 
+def test_execute_allow_queue_skips_reconcile_pre_market():
+    """allow_queue=True + market not open → submitted orders reported as 'queued (pending open)'."""
+    broker = _make_broker()
+    broker.is_market_open_today.return_value = False
+
+    runner = _make_runner(broker, allow_queue=True)
+    runner._sod_equity = 100_000.0
+
+    fake_executor = MagicMock()
+    fake_executor.submitted_orders = {"AAPL": "ord-pre-001"}
+    fake_executor.execute_decisions.return_value = {"AAPL": "submitted"}
+
+    with patch("src.live.runner.LiveExecutor", return_value=fake_executor):
+        results = runner.execute({"AAPL": {"action": "sell", "quantity": 10}})
+
+    assert results["AAPL"] == "queued (pending open)"
+
+
+def test_execute_allow_queue_reconciles_normally_when_market_open():
+    """allow_queue=True + market IS open → reconcile proceeds as normal."""
+    broker = _make_broker()
+    broker.is_market_open_today.return_value = True
+
+    runner = _make_runner(broker, allow_queue=True)
+    runner._sod_equity = 100_000.0
+
+    fake_executor = MagicMock()
+    fake_executor.submitted_orders = {"AAPL": "ord-001"}
+    fake_executor.execute_decisions.return_value = {"AAPL": "submitted"}
+
+    fake_reconciler = MagicMock()
+    fake_reconciler.reconcile.return_value = {
+        "ord-001": {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 200.0, "ticker": "AAPL"}
+    }
+
+    with patch("src.live.runner.LiveExecutor", return_value=fake_executor), \
+         patch("src.live.reconciler.Reconciler", return_value=fake_reconciler):
+        results = runner.execute({"AAPL": {"action": "sell", "quantity": 10}})
+
+    assert "filled" in results["AAPL"]
+    fake_reconciler.reconcile.assert_called_once()
+
+
 @patch("src.live.runner.to_snapshot")
 @patch("src.live.runner.PipelineContext")
 def test_prepare_post_open_falls_back_gracefully(mock_pipeline_cls, mock_to_snapshot):

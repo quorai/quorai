@@ -46,6 +46,7 @@ class LiveRunner:
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
         catch_up: bool = False,
+        allow_queue: bool = False,
     ) -> None:
         self.tickers = tickers
         self.model_name = model_name
@@ -65,6 +66,7 @@ class LiveRunner:
         self._request = request
         self._risk_profile = risk_profile
         self._catch_up = catch_up
+        self._allow_queue = allow_queue
         self._sod_equity: float = 0.0
         self._signal_log_path: str | None = None
         self._token_summary_data: dict = {}
@@ -198,21 +200,26 @@ class LiveRunner:
             abort_on_error=not self.dry_run,
         )
         if not self.dry_run and executor.submitted_orders:
-            from src.live.reconciler import Reconciler
+            if self._allow_queue and not self._broker.is_market_open_today():
+                for ticker, order_id in executor.submitted_orders.items():
+                    logger.info("[runner] %s order %s queued for market open", ticker, order_id)
+                    results[ticker] = "queued (pending open)"
+            else:
+                from src.live.reconciler import Reconciler
 
-            recon = Reconciler(broker=self._broker, journal=self._journal)
-            fills = recon.reconcile(list(executor.submitted_orders.values()))
-            for ticker, order_id in executor.submitted_orders.items():
-                info = fills.get(order_id)
-                if info:
-                    if info["status"] == "timeout":
-                        logger.warning(
-                            "[runner] %s order %s timed out — manual review required (last_filled_qty=%.3f)",
-                            ticker,
-                            order_id,
-                            info["filled_qty"],
-                        )
-                    results[ticker] = f"{info['status']} (filled={info['filled_qty']:.3f})"
+                recon = Reconciler(broker=self._broker, journal=self._journal)
+                fills = recon.reconcile(list(executor.submitted_orders.values()))
+                for ticker, order_id in executor.submitted_orders.items():
+                    info = fills.get(order_id)
+                    if info:
+                        if info["status"] == "timeout":
+                            logger.warning(
+                                "[runner] %s order %s timed out — manual review required (last_filled_qty=%.3f)",
+                                ticker,
+                                order_id,
+                                info["filled_qty"],
+                            )
+                        results[ticker] = f"{info['status']} (filled={info['filled_qty']:.3f})"
         return results
 
     def run(self) -> dict:
