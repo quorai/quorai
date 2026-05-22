@@ -25,6 +25,8 @@ uv run backtester --tickers AAPL,MSFT --model deepseek/deepseek-chat --model-pro
 
 The `backtester` console script is installed by `uv sync`. For all options see [Usage — Backtesting](#backtesting).
 
+> **Model choice matters.** All agents produce structured JSON output and the portfolio manager calls tools via LangChain. Use a model with strong instruction-following and structured-output capabilities — Claude (Anthropic), GPT-4o (OpenAI), or Gemini 2.5 Flash/Pro (Google) are reliable choices. Weaker models may produce malformed JSON that causes agent failures.
+
 ## Contents
 
 - [Features](#features)
@@ -37,6 +39,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
   - [Backtesting](#backtesting)
   - [Live / Paper Trading](#live--paper-trading)
   - [Telegram approval gate](#telegram-approval-gate)
+  - [Experiments](#experiments)
 - [Safety mechanisms](#safety-mechanisms)
 - [Project structure](#project-structure)
 - [Running tests](#running-tests)
@@ -144,6 +147,7 @@ This section documents the quantitative formulas used throughout the codebase. A
 | Alpha vs SPY | `strategy_total_return − SPY_total_return` |
 | Alpha vs basket | `strategy_total_return − equal_weight_basket_total_return` |
 | Information ratio vs SPY | `√252 × mean(daily_active_return) / std(daily_active_return)` where `active_return = strategy_return − SPY_return` |
+| Information ratio vs basket | Same formula with `active_return = strategy_return − equal_weight_basket_return` |
 
 ### Portfolio exposure (`src/backtesting/valuation.py`)
 
@@ -315,14 +319,16 @@ Key flags:
 - `--model` — model name (required)
 - `--model-provider` — provider string; bypasses catalog, accepts any OpenRouter/provider slug
 - `--analysts` — comma-separated analyst IDs (default: all)
-- `--start-date` / `--end-date` — YYYY-MM-DD (default: last month → today)
+- `--end-date` — end date YYYY-MM-DD (default: today)
+- `--start-date` — start date YYYY-MM-DD; mutually exclusive with `--days`
+- `--calendar-days` / `--days` — number of calendar days to look back from `--end-date` (default: 30); mutually exclusive with `--start-date`
 - `--initial-capital` — starting cash (default: 100 000)
 - `--show-reasoning` — print each agent's reasoning
 - `--temperature` — LLM temperature override
 - `--use-regime-selection` — classify SPY regime per day and narrow analysts to the relevant group
 - `--use-conviction-weights` — weight agents by rolling directional hit-rate (requires `src/feedback/weights.json` from a prior scored run)
 - `--risk-profile` — choose one of five risk presets: `conservative`, `cautious`, `balanced` (default), `aggressive`, `speculative`. Controls per-ticker position sizing and notional/loss-limit caps together.
-- `--agent-model AGENT=model/PROVIDER` — override model for a specific analyst; repeatable; use `*=model/PROVIDER` to override all agents
+- `--seed` — RNG seed for reproducibility (default: 42)
 - `--log-dir` — override artifact directory (default: `logs/backtest`)
 - `--run-label` — tag embedded in `run_id` and manifest for later filtering
 
@@ -338,6 +344,23 @@ uv run backtester compare \
 # --mode weights    uniform weights vs conviction weights
 # --mode both       run both comparisons sequentially
 ```
+
+#### Labeling signals and computing conviction weights
+
+The `feedback` subcommand labels a signal log with forward returns and writes per-agent conviction weights:
+
+```bash
+uv run backtester feedback \
+    --signal-log logs/backtest/signals/signals-<run-id>.jsonl
+```
+
+Flags:
+- `--signal-log` — path to JSONL signal log from a backtest or live run (required)
+- `--horizon` — forward-return horizon in trading days (default: 5)
+- `--window` — rolling scoring window in trading days (default: 60)
+- `--output-dir` — directory for labeled log and accuracy report (default: same directory as signal log)
+
+Writes `src/feedback/weights.json` and `accuracy_report.json`. Re-run backtesting with `--use-conviction-weights` to apply the computed weights.
 
 #### Reading the backtest output
 
@@ -357,7 +380,9 @@ Sortino Ratio: -6.01             ← like Sharpe but only penalises downside vol
 Max Drawdown: -0.74%             ← largest peak-to-trough decline so far
 ```
 
-**`ENGINE RUN COMPLETE`** — printed once at the very end, using the final metrics:
+At the end of the run three final blocks are printed:
+
+**`ENGINE RUN COMPLETE`** — core metrics:
 
 ```
 ENGINE RUN COMPLETE
@@ -365,10 +390,27 @@ Total Return: -0.18%
 Sharpe: -2.25
 Sortino: -3.00
 Max DD: 0.74% on 2026-05-08
-SPY Return: +1.12%           ← buy-and-hold SPY over the same window
-Alpha vs SPY: -1.30%         ← strategy total return − SPY total return
-Alpha vs Basket: -0.45%      ← strategy total return − equal-weight ticker basket
-IR vs SPY: -0.83             ← (daily active return mean / std) × √252
+```
+
+**`BASELINES`** — buy-and-hold returns over the same window:
+
+```
+BASELINES (2026-04-22 → 2026-05-22)
+  SPY:                  +1.12%
+  AAPL:                 +0.85%
+  MSFT:                 +2.31%
+  Equal-weight (AAPL,MSFT):  +1.58%
+```
+
+**`ACTIVE PERFORMANCE`** — strategy performance vs benchmarks:
+
+```
+ACTIVE PERFORMANCE
+  Strategy:                      -0.18%
+  Alpha vs SPY:                  -1.30%   ← strategy total return − SPY total return
+  Alpha vs Equal-weight basket:  -0.45%   ← strategy − equal-weight ticker basket
+  IR vs SPY:                     -0.83    ← (mean active daily return / std) × √252
+  IR vs Equal-weight basket:     -0.61
 ```
 
 > The Sharpe/Sortino in the final summary may differ slightly from the last rolling figure because the two blocks use marginally different timing for their calculation windows.
@@ -383,6 +425,7 @@ IR vs SPY: -0.83             ← (daily active return mean / std) × √252
 | Max Drawdown | < 10% | 10 – 20% | > 20% |
 | Alpha vs SPY | > 0% | ~ 0% | < 0% |
 | IR vs SPY | > 0.5 | 0 – 0.5 | < 0 |
+| IR vs basket | > 0.5 | 0 – 0.5 | < 0 |
 
 **Important caveats for short backtests**
 
@@ -408,11 +451,16 @@ Key flags:
 - `--use-regime-selection` — classify today's SPY regime and narrow analysts to the matching strategy groups (same logic as `BacktestEngine`)
 - `--use-conviction-weights` — apply per-agent conviction weights from `src/feedback/weights.json`; warns if the file is absent but does not abort
 - `--risk-profile` — choose one of five risk presets: `conservative`, `cautious`, `balanced` (default), `aggressive`, `speculative`. Controls per-ticker position sizing and RiskGate caps (notional, quantity, daily loss limit) together. See the safety table below for the values per preset.
-- `--no-signal-log` — disable writing `logs/signals-live-YYYY-MM-DD.jsonl` (signal logging is on by default)
+- `--show-reasoning` — print each agent's reasoning and debate summaries
+- `--agent-model AGENT=model[:PROVIDER]` — override model for a specific analyst; repeatable; use `*=model/PROVIDER` for a wildcard fallback. Also reads `QUORAI_AGENT_MODELS_JSON` env var (JSON dict).
+- `--no-signal-log` — disable writing `logs/live/signals/signals-YYYY-MM-DD-live.jsonl` (signal logging is on by default)
 - `--dry-run` — print decisions without submitting orders
 - `--confirm` — skip interactive confirmation prompt
 - `--require-approval` — send orders to Telegram for human approval before submitting
 - `--auto-submit` — submit immediately and send an execution report to Telegram afterwards
+- `--allow-queue` — allow running before market open on a valid trading day; orders are submitted as DAY market orders and queue for the opening cross (still skips weekends and holidays)
+- `--catch-up` — missed-cron recovery: fetches prior-close equity from Alpaca portfolio history to use as the daily-loss baseline when no SOD equity file exists
+- `--force` — skip the market-open check entirely (useful for development/testing)
 - `--margin-requirement` — margin requirement fraction (default: 0.0)
 - `--temperature` — LLM temperature override
 
@@ -449,6 +497,39 @@ You can send plain-text messages to the bot at any time. They are read at the st
 | `continue` / `resume` | Clear an active pause |
 
 The bot replies with a confirmation message when a command is recognised. Command state is persisted in `logs/command_state.json` so it survives process restarts and cron jobs.
+
+### Experiments
+
+The regime evaluation harness sweeps 10 curated (period × ticker-set) scenarios across BULL/BEAR/RISK_OFF/NEUTRAL regimes and writes a markdown summary to `experiments/results/eval-<date>.md`.
+
+```bash
+# Run all 10 scenarios (default model: google/gemini-2.5-flash-lite via OpenRouter)
+uv run python experiments/run_scenarios.py
+
+# Use a different model
+uv run python experiments/run_scenarios.py \
+    --model deepseek/deepseek-chat --model-provider OpenRouter
+
+# Run a single named scenario
+uv run python experiments/run_scenarios.py --scenarios bull-megacap-2024Q1
+
+# Smoke run — 2 tickers × 10 days (~6% of full cost)
+uv run python experiments/run_scenarios.py --max-tickers 2 --max-days 10
+
+# Skip scenarios that already have a completed manifest
+uv run python experiments/run_scenarios.py --skip-existing
+
+# Regenerate the report without re-running any scenarios
+uv run python experiments/run_scenarios.py --summary-only
+
+# Disable features for ablation testing
+uv run python experiments/run_scenarios.py --no-regime-selection --no-conviction-weights
+
+# Force fresh LLM calls (after editing prompts)
+uv run python experiments/run_scenarios.py --no-llm-cache
+```
+
+The report groups results by observed SPY regime and flags notable outliers (|α vs SPY| > 5pp).
 
 ## Safety mechanisms
 
@@ -534,17 +615,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines.
 Use `uv run python -m pytest` instead.
 
 **`--use-conviction-weights` warns about a missing `weights.json`**  
-Conviction weights are computed from a prior backtest's signal log. Run a backtest first, then label and score the output:
+Conviction weights are computed from a prior backtest's signal log. Run a backtest first, then use the `feedback` subcommand:
 
-```python
-from src.feedback.labeler import label_signals
-from src.feedback.scorer import compute_weights
-
-labeled = label_signals("logs/signals-<run-id>.jsonl", prices_df)
-compute_weights(labeled)  # writes src/feedback/weights.json
+```bash
+uv run backtester feedback \
+    --signal-log logs/backtest/signals/signals-<run-id>.jsonl
 ```
 
-Then re-run with `--use-conviction-weights`.
+This writes `src/feedback/weights.json`. Re-run with `--use-conviction-weights` to apply the weights.
 
 **Sharpe / Sortino look extreme on a short backtest**  
 Both ratios are annualised from daily returns. A handful of data points isn't statistically meaningful — use a test window of at least several months before drawing conclusions.
