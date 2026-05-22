@@ -111,50 +111,39 @@ Each trading cycle:
 | Special | Bull/bear debate node |
 
 ```mermaid
-flowchart TB
-    subgraph DV[Deep Value]
-      direction TB
-      Graham[Ben Graham]
-      Burry[Michael Burry]
-      Pabrai[Mohnish Pabrai]
-      Greenblatt[Joel Greenblatt]
-    end
-    subgraph QC[Quality Compounders]
-      direction TB
-      Damodaran[Aswath Damodaran]
-      Munger[Charlie Munger]
-      Fisher[Phil Fisher]
-      Buffett[Warren Buffett]
-    end
-    subgraph GC[Growth & Catalyst]
-      direction TB
-      Ackman[Bill Ackman]
-      Wood[Cathie Wood]
-      Lynch[Peter Lynch]
-      GrowthA[Growth Analyst]
-    end
-    subgraph MC[Macro & Cycle]
-      direction TB
-      Taleb[Nassim Taleb]
-      Jhun[Rakesh Jhunjhunwala]
-      Druck[Stanley Druckenmiller]
-      Dalio[Ray Dalio]
-      Marks[Howard Marks]
-    end
-    subgraph QS[Quant & Systematic]
-      direction TB
-      Tech[Technical Analyst]
-      Asness[Cliff Asness]
-      Seykota[Ed Seykota]
-      Simons[Jim Simons]
-    end
-    subgraph SA[Sentiment & Analytical]
-      direction TB
-      Fund[Fundamentals Analyst]
-      NewsS[News Sentiment Analyst]
-      Sent[Sentiment Analyst]
-      Val[Valuation Analyst]
-    end
+mindmap
+  root((Strategy Groups))
+    Deep Value
+      Ben Graham
+      Michael Burry
+      Mohnish Pabrai
+      Joel Greenblatt
+    Quality Compounders
+      Aswath Damodaran
+      Charlie Munger
+      Phil Fisher
+      Warren Buffett
+    Growth & Catalyst
+      Bill Ackman
+      Cathie Wood
+      Peter Lynch
+      Growth Analyst
+    Macro & Cycle
+      Nassim Taleb
+      Rakesh Jhunjhunwala
+      Stanley Druckenmiller
+      Ray Dalio
+      Howard Marks
+    Quant & Systematic
+      Technical Analyst
+      Cliff Asness
+      Ed Seykota
+      Jim Simons
+    Sentiment & Analytical
+      Fundamentals Analyst
+      News Sentiment Analyst
+      Sentiment Analyst
+      Valuation Analyst
 ```
 
 ## Architecture
