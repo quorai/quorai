@@ -6,7 +6,7 @@
 
 *A quorum of AI agents deliberating trading decisions. Pronounced "KWOR-eye" (quorum + AI).*
 
-**[GitHub](https://github.com/quorai/quorai)** · **[About](https://quorai.github.io/)**
+**[GitHub](https://github.com/quorai/quorai)** · **[About](https://quorai.github.io/)** · **[UI](https://github.com/quorai/quorai-ui)**
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -49,6 +49,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 - [Changelog](#changelog)
 - [Disclaimer](#disclaimer)
 - [Acknowledgements](#acknowledgements)
+- [Companion projects](#companion-projects)
 - [License](#license)
 
 ## Features
@@ -702,6 +703,10 @@ The agent modules named after real investors (Buffett, Munger, Ackman, Burry, Wo
 - **[Finnhub](https://finnhub.io/)** — insider trades and company news API.
 - **[yfinance](https://github.com/ranaroussi/yfinance)** — prices, financial metrics, and fundamental data.
 - **[Alpaca](https://alpaca.markets/)** — paper and live trading API.
+
+## Companion projects
+
+- **[quorai-ui](https://github.com/quorai/quorai-ui)** — read-only Next.js web UI for inspecting trading runs and experiments. Reads the cycle bundles `quorai-app` writes to `logs/<mode>/runs/` and presents them as browsable, comparable views; no write access to the trading system. Point `QUORAI_LOGS_DIR` at this repo's `logs/` directory and run `npm run dev` on port 3030.
 
 ## License
 
