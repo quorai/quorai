@@ -220,6 +220,7 @@ def _build_model(model_name: str, model_provider: ModelProvider, api_keys: dict 
             openai_api_key=api_key,
             openai_api_base="https://openrouter.ai/api/v1",
             timeout=_LLM_REQUEST_TIMEOUT,
+            max_retries=1,
             model_kwargs={
                 "extra_headers": {
                     "HTTP-Referer": cfg.YOUR_SITE_URL,

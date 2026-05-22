@@ -243,10 +243,12 @@ class PipelineContext:
             "effective_analysts": list(effective_analysts or []),
         }
 
+        active_regime: str | None = None
         if self._use_regime_selection and spy_df is not None and not spy_df.empty:
             regime, indicators = classify_regime_with_indicators(spy_df, date)
             regime_analysts = select_analysts_for_regime(regime)
             effective_analysts = regime_analysts if regime_analysts else self._selected_analysts
+            active_regime = regime.value
             regime_info = {
                 "classified": regime.value,
                 "indicators": indicators,
@@ -274,6 +276,7 @@ class PipelineContext:
             conviction_weights=self._conviction_weights,
             request=self._request,
             risk_profile=self._risk_profile,
+            regime=active_regime,
         )
 
         if self._signal_logger is not None:

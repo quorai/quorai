@@ -20,6 +20,10 @@ _YF_MAX_CONCURRENCY = max(1, int(os.environ.get("QUORAI_YF_MAX_CONCURRENCY", "4"
 
 _yf_semaphore = threading.BoundedSemaphore(_YF_MAX_CONCURRENCY)
 
+# Track (ticker, end_date) pairs that have already logged a TTM-unavailable warning
+# so the message fires once per pair rather than once per analyst call.
+_ttm_warned: set[tuple[str, str]] = set()
+
 # Maps internal field names -> ordered list of yfinance row label alternates.
 # yfinance row labels drift across library versions; always try alternates.
 _YF_INCOME: dict[str, list[str]] = {
@@ -133,10 +137,16 @@ def fetch_statements(ticker: str, period: str, end_date: str, limit: int) -> lis
 
     period: "annual" | "quarterly" | "ttm"
 
-    TTM is computed by summing trailing-4-quarter income/cashflow flow items and
-    using the most recent quarter's balance-sheet stock items.
+    Consults the local SEC EDGAR store first (historically correct, point-in-time).
+    Falls through to yfinance only when the ticker has not been seeded.
     Retries up to 2 times on transient empty results (e.g. intermittent DNS failures).
     """
+    from src.data.sec_store import get_sec_store
+
+    sec_result = get_sec_store().get_statements(ticker, period, end_date, limit)
+    if sec_result is not None:
+        return sec_result
+
     _MAX_RETRIES = 2
     for attempt in range(_MAX_RETRIES + 1):
         if attempt > 0:
@@ -218,7 +228,10 @@ def _fetch_ttm(yf_ticker, ticker: str, end_date: str, limit: int) -> list[Statem
 
     q_cols = _filter_cols(df_income, end_date)
     if not q_cols:
-        logger.warning("No quarterly financials for %s up to %s; cannot compute TTM", ticker, end_date)
+        key = (ticker, end_date)
+        if key not in _ttm_warned:
+            _ttm_warned.add(key)
+            logger.warning("No quarterly financials for %s up to %s; cannot compute TTM", ticker, end_date)
         return []
 
     # Sum the trailing 4 quarters for flow items
@@ -326,19 +339,23 @@ def fetch_market_cap(ticker: str, end_date: str) -> float | None:
                     return float(shares) * float(price)
                 return None
 
-            # Historical: get shares from get_shares_full, price from history
+            # Historical: prefer SEC store (point-in-time correct) over yfinance.info
+            # (yfinance.info returns current share count — look-ahead bias for historical dates)
+            from src.data.sec_store import get_sec_store
+
             start_dt = (end_dt - datetime.timedelta(days=35)).strftime("%Y-%m-%d")
-            try:
-                shares_series = yf_ticker.get_shares_full(start=start_dt, end=end_date)
-                if shares_series is not None and not shares_series.empty:
-                    # Timezone-strip and take the most recent entry
-                    if hasattr(shares_series.index, "tz_convert"):
-                        shares_series.index = shares_series.index.tz_convert(None)
-                    shares = float(shares_series.iloc[-1])
-                else:
-                    shares = None
-            except Exception:
-                shares = None
+            shares: float | None = get_sec_store().get_shares_outstanding(ticker, end_date)
+
+            if shares is None:
+                try:
+                    shares_series = yf_ticker.get_shares_full(start=start_dt, end=end_date)
+                    if shares_series is not None and not shares_series.empty:
+                        # Timezone-strip and take the most recent entry
+                        if hasattr(shares_series.index, "tz_convert"):
+                            shares_series.index = shares_series.index.tz_convert(None)
+                        shares = float(shares_series.iloc[-1])
+                except Exception:
+                    pass
 
             if shares is None:
                 try:

@@ -58,6 +58,7 @@ def run_quorai(
     conviction_weights: dict[str, float] | None = None,
     request: RunRequest | None = None,
     risk_profile: RiskProfile | None = None,
+    regime: str | None = None,
 ):
     if selected_analysts is None:
         selected_analysts = []
@@ -93,6 +94,7 @@ def run_quorai(
                     "request": request,
                     "selected_analysts": effective_analysts,
                     "risk_profile": risk_profile,
+                    "regime": regime,
                 },
             },
         )

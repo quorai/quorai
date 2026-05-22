@@ -32,6 +32,7 @@ class AgentController:
         conviction_weights: dict[str, float] | None = None,
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
+        regime: str | None = None,
     ) -> AgentOutput:
         # Ensure we pass a plain snapshot dict to preserve legacy expectations
         if isinstance(portfolio, Portfolio):
@@ -53,6 +54,7 @@ class AgentController:
             conviction_weights=conviction_weights,
             request=request,
             risk_profile=risk_profile,
+            regime=regime,
         )
 
         # Normalize outputs to avoid None/missing keys

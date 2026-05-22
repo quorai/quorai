@@ -67,6 +67,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
 
     progress.update_status(agent_id, None, "Generating trading decisions")
 
+    regime = state.get("metadata", {}).get("regime")
     result = generate_trading_decision(
         tickers=tickers,
         signals_by_ticker=signals_by_ticker,
@@ -75,6 +76,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
         portfolio=portfolio,
         agent_id=agent_id,
         state=state,
+        regime=regime,
     )
     message = HumanMessage(
         content=json.dumps({ticker: decision.model_dump() for ticker, decision in result.decisions.items()}),
@@ -97,6 +99,8 @@ def compute_allowed_actions(
     current_prices: dict[str, float],
     max_shares: dict[str, float],
     portfolio: dict[str, float],
+    regime: str | None = None,
+    group_signals: dict[str, dict] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compute allowed actions and max quantities for each ticker deterministically."""
     allowed = {}
@@ -157,6 +161,25 @@ def compute_allowed_actions(
             if k != "hold" and v > 0:
                 pruned[k] = v
 
+        # Regime gate — deterministically block actions that fight the prevailing trend.
+        # "cover" is always allowed (closing a short is not fighting the trend).
+        # "sell" is always allowed (reducing a long is not fighting the trend).
+        if regime is not None and group_signals is not None:
+            ticker_groups = group_signals.get(ticker, {})
+            if regime == "bull_trend":
+                quant_bull = ticker_groups.get("quant_systematic", {}).get("signal") == "bullish"
+                growth_bull = ticker_groups.get("growth_and_catalyst", {}).get("signal") == "bullish"
+                if quant_bull or growth_bull:
+                    pruned.pop("short", None)
+            elif regime == "bear_trend":
+                quant_bear = ticker_groups.get("quant_systematic", {}).get("signal") == "bearish"
+                quality_bear = ticker_groups.get("quality_compounders", {}).get("signal") == "bearish"
+                if quant_bear or quality_bear:
+                    pruned.pop("buy", None)
+            elif regime == "risk_off":
+                pruned.pop("buy", None)
+                pruned.pop("short", None)
+
         allowed[ticker] = pruned
 
     return allowed
@@ -187,11 +210,20 @@ def generate_trading_decision(
     portfolio: dict[str, float],
     agent_id: str,
     state: AgentState,
+    regime: str | None = None,
 ) -> PortfolioManagerOutput:
     """Get decisions from the LLM with deterministic constraints and a minimal prompt."""
 
-    # Deterministic constraints
-    allowed_actions_full = compute_allowed_actions(tickers, current_prices, max_shares, portfolio)
+    group_signals = state["data"].get("group_signals", {})
+    # Deterministic constraints (regime gate applied here)
+    allowed_actions_full = compute_allowed_actions(
+        tickers,
+        current_prices,
+        max_shares,
+        portfolio,
+        regime=regime,
+        group_signals=group_signals,
+    )
 
     # Pre-fill pure holds to avoid sending them to the LLM at all
     prefilled_decisions: dict[str, PortfolioDecision] = {}
@@ -233,6 +265,14 @@ def generate_trading_decision(
         }
     debate_section = "\nGroup debate (contested tickers):\n" + json.dumps(relevant_debates, separators=(",", ":"), ensure_ascii=False) + "\n" if relevant_debates else ""
 
+    regime_instruction = ""
+    if regime == "bull_trend":
+        regime_instruction = "\nMarket regime: BULL_TREND. Avoid new shorts — the allowed actions already block them when momentum/growth groups are bullish. Lean long; hold existing shorts only if quant and growth are both decisively bearish."
+    elif regime == "bear_trend":
+        regime_instruction = "\nMarket regime: BEAR_TREND. Avoid new longs — the allowed actions already block them when quant/quality groups are bearish. Lean short or cash; hold existing longs only if quant and quality are both decisively bullish."
+    elif regime == "risk_off":
+        regime_instruction = "\nMarket regime: RISK_OFF. Reduce exposure — new buys and new shorts are blocked. Prefer sell/cover/hold to protect capital."
+
     template = ChatPromptTemplate.from_messages(
         [
             (
@@ -244,7 +284,8 @@ def generate_trading_decision(
                 "Pick one allowed action per ticker and a quantity ≤ the max (fractional quantities allowed, e.g. 1.5). "
                 "Reference the actual current position in your reasoning — do not describe positions that don't exist. "
                 "When groups disagree, explain which group perspective is driving your decision. "
-                "Keep reasoning very concise (max 100 chars). No cash or margin math. Return JSON only.",
+                "Keep reasoning very concise (max 100 chars). No cash or margin math. Return JSON only."
+                "{regime_instruction}",
             ),
             ("human", 'Signals:\n{signals}\n{debate_section}Positions:\n{positions}\nAllowed:\n{allowed}\n\nFormat:\n{{\n  "decisions": {{\n    "TICKER": {{"action":"...","quantity":float,"confidence":int,"reasoning":"..."}}\n  }}\n}}'),
         ]
@@ -255,6 +296,7 @@ def generate_trading_decision(
         "debate_section": debate_section,
         "positions": json.dumps(current_positions, separators=(",", ":"), ensure_ascii=False),
         "allowed": json.dumps(compact_allowed, separators=(",", ":"), ensure_ascii=False),
+        "regime_instruction": regime_instruction,
     }
     prompt = template.invoke(prompt_data)
 

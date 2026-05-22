@@ -7,11 +7,13 @@ Usage (from project root):
     uv run python experiments/run_scenarios.py --skip-existing         # skip already-done
     uv run python experiments/run_scenarios.py --summary-only          # regenerate report
     uv run python experiments/run_scenarios.py --no-llm-cache          # fresh LLM calls (after prompt edits)
+    uv run python experiments/run_scenarios.py --max-tickers 2 --max-days 10  # smoke: 2 tickers × 10 days (~6% cost)
 """
+
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 import json
 import os
@@ -42,70 +44,80 @@ class Scenario:
 SCENARIOS: list[Scenario] = [
     Scenario(
         label="bull-megacap-2024Q1",
-        start="2024-01-01", end="2024-03-31",
+        start="2024-01-01",
+        end="2024-03-31",
         tickers="NVDA,MSFT,META,AVGO,AMD",
         expected_regime=MarketRegime.BULL_TREND,
         shape="Strong AI-led uptrend — can it ride momentum without prematurely shorting?",
     ),
     Scenario(
         label="bear-growth-2022Q2",
-        start="2022-04-01", end="2022-06-30",
+        start="2022-04-01",
+        end="2022-06-30",
         tickers="NVDA,MSFT,META,NFLX,TSLA",
         expected_regime=MarketRegime.BEAR_TREND,
         shape="Rate-hike growth selloff — does it short, hedge, or just lose less?",
     ),
     Scenario(
         label="crash-recovery-2020-covid",
-        start="2020-02-15", end="2020-05-15",
+        start="2020-02-15",
+        end="2020-05-15",
         tickers="SPY,AAPL,MSFT,JPM,BA",
         expected_regime=MarketRegime.RISK_OFF,
         shape="COVID crash + V-recovery — regime transition, risk_manager under stress",
     ),
     Scenario(
         label="chop-defensives-2023Q2",
-        start="2023-04-01", end="2023-06-30",
+        start="2023-04-01",
+        end="2023-06-30",
         tickers="JNJ,PG,KO,WMT,VZ",
         expected_regime=MarketRegime.NEUTRAL,
         shape="Sideways tape with defensives — does it overtrade in a directionless market?",
     ),
     Scenario(
         label="dispersion-2022Q4",
-        start="2022-10-01", end="2022-12-31",
+        start="2022-10-01",
+        end="2022-12-31",
         tickers="NVDA,AAPL,META,INTC,F",
         expected_regime=MarketRegime.NEUTRAL,
         shape="Clear winner/loser dispersion — can long-short capture both sides?",
     ),
     Scenario(
         label="meme-vol-2021Q1",
-        start="2021-01-01", end="2021-03-31",
+        start="2021-01-01",
+        end="2021-03-31",
         tickers="GME,AMC,BB",
         expected_regime=MarketRegime.BULL_TREND,
         shape="Meme/extreme vol — does it stay disciplined under irrational price action?",
     ),
     Scenario(
         label="rotation-2022Q1",
-        start="2022-01-01", end="2022-03-31",
+        start="2022-01-01",
+        end="2022-03-31",
         tickers="XOM,CVX,NVDA,META",
         expected_regime=MarketRegime.BEAR_TREND,
         shape="Textbook cyclicals-up/growth-down rotation — long-short sector signal quality",
     ),
     Scenario(
         label="grind-down-2022-late",
-        start="2022-08-01", end="2022-10-15",
+        start="2022-08-01",
+        end="2022-10-15",
         tickers="AAPL,MSFT,JPM,BAC,XOM",
         expected_regime=MarketRegime.BEAR_TREND,
         shape="Slow -16% SPY drift — does it avoid catching falling knives?",
     ),
     Scenario(
         label="quiet-bull-2023-summer",
-        start="2023-06-01", end="2023-08-15",
+        start="2023-06-01",
+        end="2023-08-15",
         tickers="AAPL,MSFT,NVDA,GOOG,AMZN",
         expected_regime=MarketRegime.BULL_TREND,
         shape="Low-vol +6% drift — does it let winners run without overtrading?",
     ),
     Scenario(
         label="tariff-shock-2025Q2",
-        start="2025-04-01", end="2025-04-30",
+        start="2025-04-01",
+        end="2025-04-30",
         tickers="SPY,AAPL,NVDA,F,XOM",
         expected_regime=MarketRegime.RISK_OFF,
         shape="Apr-2 tariff shock + Apr-9 reversal — regime switch handling under news vol",
@@ -113,7 +125,27 @@ SCENARIOS: list[Scenario] = [
 ]
 
 
-def _run_scenario(scenario: Scenario, model: str, provider: str, no_llm_cache: bool) -> bool:
+def _truncate(s: Scenario, max_tickers: int | None, max_days: int | None) -> Scenario:
+    tickers = s.tickers
+    end = s.end
+    if max_tickers:
+        tickers = ",".join(s.tickers.split(",")[:max_tickers])
+    if max_days:
+        capped = (date.fromisoformat(s.start) + timedelta(days=max_days)).isoformat()
+        end = min(capped, s.end)
+    if tickers == s.tickers and end == s.end:
+        return s
+    return replace(s, tickers=tickers, end=end)
+
+
+def _run_scenario(
+    scenario: Scenario,
+    model: str,
+    provider: str,
+    no_llm_cache: bool,
+    use_regime_selection: bool = True,
+    use_conviction_weights: bool = True,
+) -> bool:
     env = os.environ.copy()
     if no_llm_cache:
         env["QUORAI_LLM_CACHE"] = "0"
@@ -123,25 +155,53 @@ def _run_scenario(scenario: Scenario, model: str, provider: str, no_llm_cache: b
     log_file = log_dir / f"{scenario.label}.log"
 
     cmd = [
-        "uv", "run", "backtester",
-        "--tickers", scenario.tickers,
-        "--start-date", scenario.start,
-        "--end-date", scenario.end,
-        "--model", model,
-        "--model-provider", provider,
-        "--initial-capital", "100000",
-        "--seed", "42",
-        "--run-label", scenario.label,
-        "--log-dir", "logs/experiments",
+        "uv",
+        "run",
+        "backtester",
+        "--tickers",
+        scenario.tickers,
+        "--start-date",
+        scenario.start,
+        "--end-date",
+        scenario.end,
+        "--model",
+        model,
+        "--model-provider",
+        provider,
+        "--initial-capital",
+        "100000",
+        "--seed",
+        "42",
+        "--run-label",
+        scenario.label,
+        "--log-dir",
+        "logs/experiments",
     ]
+    if use_regime_selection:
+        cmd.append("--use-regime-selection")
+    if use_conviction_weights:
+        cmd.append("--use-conviction-weights")
 
     print(f"[{scenario.label}] {scenario.start} → {scenario.end} ({scenario.tickers})", flush=True)
 
     with open(log_file, "w") as f:
-        result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env, cwd=PROJECT_ROOT)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=PROJECT_ROOT,
+            text=True,
+            bufsize=1,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            f.write(line)
+            print(line, end="", flush=True)
+        proc.wait()
 
-    if result.returncode != 0:
-        print(f"  FAILED (exit {result.returncode}) — see {log_file.relative_to(PROJECT_ROOT)}")
+    if proc.returncode != 0:
+        print(f"  FAILED (exit {proc.returncode}) — see {log_file.relative_to(PROJECT_ROOT)}")
         return False
 
     print("  OK")
@@ -198,22 +258,24 @@ def _build_report(scenarios: list[Scenario], output_path: Path) -> None:
         except Exception:
             regime_observed = MarketRegime.NEUTRAL
 
-        rows.append({
-            "label": s.label,
-            "window": f"{s.start} → {s.end}",
-            "tickers": s.tickers,
-            "expected_regime": s.expected_regime.value,
-            "observed_regime": regime_observed.value,
-            "total_return_pct": result.get("total_return_pct"),
-            "spy_return_pct": baselines.get("spy_return_pct"),
-            "alpha_vs_spy": metrics.get("alpha_vs_spy_pct"),
-            "alpha_vs_basket": metrics.get("alpha_vs_basket_pct"),
-            "ir_vs_spy": metrics.get("information_ratio_vs_spy"),
-            "sharpe": metrics.get("sharpe_ratio"),
-            "max_dd": metrics.get("max_drawdown"),
-            "long_short_ratio": metrics.get("long_short_ratio"),
-            "shape": s.shape,
-        })
+        rows.append(
+            {
+                "label": s.label,
+                "window": f"{s.start} → {s.end}",
+                "tickers": s.tickers,
+                "expected_regime": s.expected_regime.value,
+                "observed_regime": regime_observed.value,
+                "total_return_pct": result.get("total_return_pct"),
+                "spy_return_pct": baselines.get("spy_return_pct"),
+                "alpha_vs_spy": metrics.get("alpha_vs_spy_pct"),
+                "alpha_vs_basket": metrics.get("alpha_vs_basket_pct"),
+                "ir_vs_spy": metrics.get("information_ratio_vs_spy"),
+                "sharpe": metrics.get("sharpe_ratio"),
+                "max_dd": metrics.get("max_drawdown"),
+                "long_short_ratio": metrics.get("long_short_ratio"),
+                "shape": s.shape,
+            }
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -265,10 +327,7 @@ def _build_report(scenarios: list[Scenario], output_path: Path) -> None:
         median_alpha = sorted(alphas)[len(alphas) // 2] if alphas else None
         win_rate = (sum(1 for a in alphas if a > 0) / len(alphas)) if alphas else None
         mean_ir = sum(irs) / len(irs) if irs else None
-        lines.append(
-            f"| {regime} | {len(group)} | {_fmt(mean_alpha, '%')} | {_fmt(median_alpha, '%')} "
-            f"| {f'{win_rate:.0%}' if win_rate is not None else 'N/A'} | {_fmt(mean_ir)} |"
-        )
+        lines.append(f"| {regime} | {len(group)} | {_fmt(mean_alpha, '%')} | {_fmt(median_alpha, '%')} | {f'{win_rate:.0%}' if win_rate is not None else 'N/A'} | {_fmt(mean_ir)} |")
 
     # Notable outliers
     notable = [r for r in rows if r["alpha_vs_spy"] is not None and abs(r["alpha_vs_spy"]) > 5.0]
@@ -295,8 +354,36 @@ def main() -> None:
     parser.add_argument("--skip-existing", action="store_true", dest="skip_existing", help="Skip scenarios with a completed manifest in logs/")
     parser.add_argument("--summary-only", action="store_true", dest="summary_only", help="Skip all runs; regenerate report from existing manifests")
     parser.add_argument(
-        "--no-llm-cache", action="store_true", dest="no_llm_cache",
+        "--max-tickers",
+        type=int,
+        default=None,
+        dest="max_tickers",
+        help="Truncate each scenario's ticker list to the first N (smoke testing).",
+    )
+    parser.add_argument(
+        "--max-days",
+        type=int,
+        default=None,
+        dest="max_days",
+        help="Truncate each scenario's date range to N calendar days from start (smoke testing).",
+    )
+    parser.add_argument(
+        "--no-llm-cache",
+        action="store_true",
+        dest="no_llm_cache",
         help="Set QUORAI_LLM_CACHE=0 for fresh LLM calls (use after editing prompts)",
+    )
+    parser.add_argument(
+        "--no-regime-selection",
+        action="store_true",
+        dest="no_regime_selection",
+        help="Disable --use-regime-selection (runs all analysts regardless of market regime)",
+    )
+    parser.add_argument(
+        "--no-conviction-weights",
+        action="store_true",
+        dest="no_conviction_weights",
+        help="Disable --use-conviction-weights (uniform analyst weighting)",
     )
     args = parser.parse_args()
 
@@ -308,16 +395,26 @@ def main() -> None:
         sys.exit(1)
 
     if not args.summary_only:
+        if args.max_tickers or args.max_days:
+            print(f"SMOKE MODE: max_tickers={args.max_tickers}, max_days={args.max_days} — results are not representative.\n")
         if args.no_llm_cache:
             print("LLM cache disabled — all calls will be fresh.")
         else:
             print("LLM cache active. Pass --no-llm-cache after editing prompts to avoid stale responses.\n")
 
         for s in scenarios:
+            s = _truncate(s, args.max_tickers, args.max_days)
             if args.skip_existing and _is_already_done(s.label):
                 print(f"[{s.label}] skipping (already completed)")
                 continue
-            _run_scenario(s, args.model, args.model_provider, args.no_llm_cache)
+            _run_scenario(
+                s,
+                args.model,
+                args.model_provider,
+                args.no_llm_cache,
+                use_regime_selection=not args.no_regime_selection,
+                use_conviction_weights=not args.no_conviction_weights,
+            )
 
     report_path = RESULTS_DIR / f"eval-{date.today()}.md"
     _build_report(scenarios, report_path)
