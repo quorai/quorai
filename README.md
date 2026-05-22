@@ -77,9 +77,20 @@ Market Data → Analyst Agents → Portfolio Manager → Order Execution
            (LangGraph nodes)   (deliberation graph)
 ```
 
-<p align="center">
-  <img src="assets/flow-diagram.png" alt="Quorai pipeline diagram" width="700"/>
-</p>
+```mermaid
+flowchart LR
+    MD[Market Data] --> PC[PipelineContext<br/>regime + conviction weights]
+    PC --> SN([start_node])
+    SN --> A1[analyst_1]
+    SN --> A2[analyst_2]
+    SN --> AN[... analyst_25]
+    A1 --> DN[debate_node<br/>6 strategy groups]
+    A2 --> DN
+    AN --> DN
+    DN --> RM[risk_management_agent]
+    RM --> PM[portfolio_manager]
+    PM --> OE[Order Execution]
+```
 
 Each trading cycle:
 1. Financial data is fetched (price, fundamentals, news, macro indicators)
@@ -99,9 +110,52 @@ Each trading cycle:
 | Risk | Risk manager, Taleb (tail-risk) |
 | Special | Bull/bear debate node |
 
-<p align="center">
-  <img src="assets/agents-groups.png" alt="Analyst strategy groups" width="700"/>
-</p>
+```mermaid
+flowchart TB
+    subgraph DV[Deep Value]
+      direction TB
+      Graham[Ben Graham]
+      Burry[Michael Burry]
+      Pabrai[Mohnish Pabrai]
+      Greenblatt[Joel Greenblatt]
+    end
+    subgraph QC[Quality Compounders]
+      direction TB
+      Damodaran[Aswath Damodaran]
+      Munger[Charlie Munger]
+      Fisher[Phil Fisher]
+      Buffett[Warren Buffett]
+    end
+    subgraph GC[Growth & Catalyst]
+      direction TB
+      Ackman[Bill Ackman]
+      Wood[Cathie Wood]
+      Lynch[Peter Lynch]
+      GrowthA[Growth Analyst]
+    end
+    subgraph MC[Macro & Cycle]
+      direction TB
+      Taleb[Nassim Taleb]
+      Jhun[Rakesh Jhunjhunwala]
+      Druck[Stanley Druckenmiller]
+      Dalio[Ray Dalio]
+      Marks[Howard Marks]
+    end
+    subgraph QS[Quant & Systematic]
+      direction TB
+      Tech[Technical Analyst]
+      Asness[Cliff Asness]
+      Seykota[Ed Seykota]
+      Simons[Jim Simons]
+    end
+    subgraph SA[Sentiment & Analytical]
+      direction TB
+      Fund[Fundamentals Analyst]
+      NewsS[News Sentiment Analyst]
+      Sent[Sentiment Analyst]
+      Val[Valuation Analyst]
+    end
+```
 
 ## Architecture
 
