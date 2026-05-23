@@ -64,6 +64,37 @@ class TestCalculateVolatilityAdjustedLimit:
         limit = calculate_volatility_adjusted_limit(0.90)
         assert 0.0 < limit <= 0.20
 
+    def test_vol_multiplier_matches_docstring_bands(self):
+        """
+        Regression for F3: piecewise-linear, continuous at all boundaries.
+        - Low (<0.15): 25%
+        - Medium (0.15–0.30): linear 20% → 15%
+        - High (0.30–0.50): linear 15% → 10%
+        - Very high (≥0.50): 10%
+        """
+        base = 0.20
+        # Low vol: flat at 25%
+        assert calculate_volatility_adjusted_limit(0.10, base_limit=base) == pytest.approx(0.25, abs=1e-6)
+
+        # Medium band endpoints
+        assert calculate_volatility_adjusted_limit(0.15, base_limit=base) == pytest.approx(0.20, abs=1e-4)
+        assert calculate_volatility_adjusted_limit(0.2999, base_limit=base) == pytest.approx(0.15, abs=0.005)
+
+        # Boundary at vol=0.30: high band starts at 15%
+        assert calculate_volatility_adjusted_limit(0.30, base_limit=base) == pytest.approx(0.15, abs=1e-4)
+
+        # High band endpoints — continuous at 0.50
+        assert calculate_volatility_adjusted_limit(0.4999, base_limit=base) == pytest.approx(0.10, abs=0.005)
+        assert calculate_volatility_adjusted_limit(0.50, base_limit=base) == pytest.approx(0.10, abs=1e-4)
+
+        # Very high: flat at 10%
+        assert calculate_volatility_adjusted_limit(0.80, base_limit=base) == pytest.approx(0.10, abs=1e-4)
+
+        # Strictly monotonically non-increasing across bands
+        limits = [calculate_volatility_adjusted_limit(v, base_limit=base) for v in [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]]
+        for i in range(len(limits) - 1):
+            assert limits[i] >= limits[i + 1], f"Non-monotonic at index {i}: {limits[i]} < {limits[i+1]}"
+
 
 class TestCalculateCorrelationMultiplier:
     def test_correlation_penalty_applied(self):
