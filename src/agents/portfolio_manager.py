@@ -30,8 +30,10 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
     tickers = state["data"]["tickers"]
 
     position_limits = {}
+    short_position_limits = {}
     current_prices = {}
     max_shares = {}
+    max_short_shares = {}
     signals_by_ticker = {}
     for ticker in tickers:
         progress.update_status(agent_id, ticker, "Processing analyst signals")
@@ -45,13 +47,16 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
 
         risk_data = analyst_signals.get(risk_manager_id, {}).get(ticker, {})
         position_limits[ticker] = risk_data.get("remaining_position_limit", 0.0)
+        short_position_limits[ticker] = risk_data.get("max_short_position_size", position_limits[ticker])
         current_prices[ticker] = float(risk_data.get("current_price", 0.0))
 
         # Calculate maximum shares allowed based on position limit and price
         if current_prices[ticker] > 0:
             max_shares[ticker] = position_limits[ticker] / current_prices[ticker]
+            max_short_shares[ticker] = short_position_limits[ticker] / current_prices[ticker]
         else:
             max_shares[ticker] = 0
+            max_short_shares[ticker] = 0
 
         # Compress group-aggregated signals to {group: {sig, conf, dissent}}
         group_signals = state["data"].get("group_signals", {})
@@ -73,6 +78,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
         signals_by_ticker=signals_by_ticker,
         current_prices=current_prices,
         max_shares=max_shares,
+        max_short_shares=max_short_shares,
         portfolio=portfolio,
         agent_id=agent_id,
         state=state,
@@ -101,6 +107,7 @@ def compute_allowed_actions(
     portfolio: dict[str, float],
     regime: str | None = None,
     group_signals: dict[str, dict] | None = None,
+    max_short_shares: dict[str, float] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compute allowed actions and max quantities for each ticker deterministically."""
     allowed = {}
@@ -111,9 +118,9 @@ def compute_allowed_actions(
     equity = float(portfolio.get("equity", cash))
 
     # Running totals prevent double-spending across tickers in the same cycle.
-    # remaining_short_capacity is in notional dollars (matches (equity/margin_req) capacity formula).
+    # remaining_short_capacity is in notional dollars: (equity − margin_used) / margin_req.
     remaining_cash = cash
-    remaining_short_capacity = max(0.0, (equity / margin_requirement) - margin_used) if margin_requirement > 0 else 0.0
+    remaining_short_capacity = max(0.0, (equity - margin_used) / margin_requirement) if margin_requirement > 0 else 0.0
 
     for ticker in tickers:
         price = float(current_prices.get(ticker, 0.0))
@@ -124,6 +131,8 @@ def compute_allowed_actions(
         long_shares = float(pos.get("long", 0) or 0)
         short_shares = float(pos.get("short", 0) or 0)
         max_qty = float(max_shares.get(ticker, 0) or 0)
+        # Use a separate short cap if provided; fall back to the long cap.
+        max_short_qty = float((max_short_shares or {}).get(ticker, 0) or 0) if max_short_shares is not None else max_qty
 
         # Start with zeros
         actions: dict[str, float] = {"buy": 0, "sell": 0, "short": 0, "cover": 0, "hold": 0}
@@ -141,13 +150,13 @@ def compute_allowed_actions(
         # Short side
         if short_shares > 0:
             actions["cover"] = short_shares
-        if price > 0 and max_qty > 0:
+        if price > 0 and max_short_qty > 0:
             if margin_requirement <= 0.0:
-                # If margin requirement is zero or unset, only cap by max_qty
-                max_short = max_qty
+                # If margin requirement is zero or unset, only cap by max_short_qty
+                max_short = max_short_qty
             else:
                 max_short_margin = remaining_short_capacity / price
-                max_short = max(0, min(max_qty, max_short_margin))
+                max_short = max(0, min(max_short_qty, max_short_margin))
             if max_short > 0:
                 actions["short"] = max_short
                 remaining_short_capacity -= max_short * price  # consume notional capacity
@@ -211,6 +220,7 @@ def generate_trading_decision(
     agent_id: str,
     state: AgentState,
     regime: str | None = None,
+    max_short_shares: dict[str, float] | None = None,
 ) -> PortfolioManagerOutput:
     """Get decisions from the LLM with deterministic constraints and a minimal prompt."""
 
@@ -223,6 +233,7 @@ def generate_trading_decision(
         portfolio,
         regime=regime,
         group_signals=group_signals,
+        max_short_shares=max_short_shares,
     )
 
     # Pre-fill pure holds to avoid sending them to the LLM at all

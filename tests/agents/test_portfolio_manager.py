@@ -65,6 +65,30 @@ class TestComputeAllowedActions:
         assert "sell" in result["AAPL"]
         assert result["AAPL"]["sell"] == pytest.approx(5.0)
 
+    def test_max_short_shares_allows_larger_short_than_long(self):
+        """
+        Regression for F2: when cash is low (low long cap) but margin capacity is high,
+        providing a separate max_short_shares allows a larger short than the long cap.
+        """
+        result = compute_allowed_actions(
+            tickers=["AAPL"],
+            current_prices={"AAPL": 100.0},
+            max_shares={"AAPL": 5.0},       # long cap: 5 shares ($500 from cash)
+            max_short_shares={"AAPL": 20.0},  # short cap: 20 shares (margin-derived)
+            portfolio=_portfolio(
+                cash=500.0,
+                equity=10_000.0,
+                positions={},
+            ),
+        )
+        long_cap = result["AAPL"].get("buy", 0)
+        short_cap = result["AAPL"].get("short", 0)
+        assert long_cap == pytest.approx(5.0), f"Expected buy=5.0, got {long_cap}"
+        assert short_cap > long_cap, (
+            f"Short capacity ({short_cap}) should exceed long capacity ({long_cap}) "
+            "when max_short_shares is higher than max_shares. F2 bug: max_short_shares ignored."
+        )
+
     def test_equity_fallback_uses_cash_when_equity_missing(self):
         """portfolio without 'equity' key falls back to cash for margin calculation (M13 known behaviour)."""
         portfolio_no_equity = {

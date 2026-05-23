@@ -166,7 +166,7 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
         # Use portfolio equity (NAV) as the base for margin capacity; fall back to
         # total_portfolio_value computed above if "equity" is absent.
         equity_for_margin = float(portfolio.get("equity", total_portfolio_value))
-        available_margin = max(0.0, (equity_for_margin / margin_req) - margin_used_val) if margin_req > 0 else 0.0
+        available_margin = max(0.0, (equity_for_margin - margin_used_val) / margin_req) if margin_req > 0 else 0.0
 
         max_long_size = min(max(0.0, remaining_position_limit), cash)
         max_short_size = min(max(0.0, remaining_position_limit), available_margin)
@@ -249,22 +249,22 @@ def calculate_volatility_adjusted_limit(annualized_volatility: float, base_limit
     """
     Calculate position limit as percentage of portfolio based on volatility.
 
-    Logic:
-    - Low volatility (<15%): Up to 25% allocation
-    - Medium volatility (15-30%): 15-20% allocation
-    - High volatility (>30%): 10-15% allocation
-    - Very high volatility (>50%): Max 10% allocation
+    Piecewise linear, continuous at all boundaries:
+    - Low (<15%): 25% allocation (flat)
+    - Medium (15-30%): linear 20% → 15%
+    - High (30-50%): linear 15% → 10%
+    - Very high (≥50%): 10% allocation (flat)
     """
 
     if annualized_volatility < 0.15:  # Low volatility
         # Allow higher allocation for stable stocks
         vol_multiplier = 1.25  # Up to 25%
     elif annualized_volatility < 0.30:  # Medium volatility
-        # Standard allocation with slight adjustment based on volatility
-        vol_multiplier = 1.0 - (annualized_volatility - 0.15) * 0.5  # 20% -> 12.5%
+        # Linear decline: 20% at vol=0.15 → 15% at vol=0.30
+        vol_multiplier = 1.0 - (annualized_volatility - 0.15) * (5 / 3)  # 20% -> 15%
     elif annualized_volatility < 0.50:  # High volatility
-        # Reduce allocation significantly
-        vol_multiplier = 0.75 - (annualized_volatility - 0.30) * 0.5  # 15% -> 5%
+        # Linear decline: 15% at vol=0.30 → 10% at vol=0.50
+        vol_multiplier = 0.75 - (annualized_volatility - 0.30) * 1.25  # 15% -> 10%
     else:  # Very high volatility (>50%)
         # Minimum allocation for very risky stocks
         vol_multiplier = 0.50  # Max 10%
