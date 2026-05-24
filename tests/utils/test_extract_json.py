@@ -1,10 +1,7 @@
 """Tests for extract_json_from_response and _regex_field_extract."""
 
-import pytest
-
-from src.utils.llm import extract_json_from_response, _regex_field_extract
 from src.agents._signals import BaseSignal
-
+from src.utils.llm import _regex_field_extract, extract_json_from_response
 
 # ---------------------------------------------------------------------------
 # extract_json_from_response
