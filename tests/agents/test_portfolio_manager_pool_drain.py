@@ -87,10 +87,7 @@ class TestPortfolioManagerPoolDrain:
         aapl_short = allowed["AAPL"].get("short", 0)
         # Correct remaining notional = 10_000; max short shares = 10_000 / 100 = 100.
         # Buggy formula would allow 150 shares (notional 15_000).
-        assert aapl_short <= 100.0 + 1e-9, (
-            f"Short capacity should be ≤ 100 shares (notional 10_000 remaining) but got {aapl_short}. "
-            "Formula bug: (equity - margin_used) / margin_req != equity/margin_req - margin_used."
-        )
+        assert aapl_short <= 100.0 + 1e-9, f"Short capacity should be ≤ 100 shares (notional 10_000 remaining) but got {aapl_short}. Formula bug: (equity - margin_used) / margin_req != equity/margin_req - margin_used."
 
     def test_first_ticker_unaffected_when_cash_is_ample(self):
         """When cash comfortably covers the first ticker's max, its allocation is unchanged."""

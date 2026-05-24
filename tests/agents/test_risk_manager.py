@@ -93,7 +93,7 @@ class TestCalculateVolatilityAdjustedLimit:
         # Strictly monotonically non-increasing across bands
         limits = [calculate_volatility_adjusted_limit(v, base_limit=base) for v in [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]]
         for i in range(len(limits) - 1):
-            assert limits[i] >= limits[i + 1], f"Non-monotonic at index {i}: {limits[i]} < {limits[i+1]}"
+            assert limits[i] >= limits[i + 1], f"Non-monotonic at index {i}: {limits[i]} < {limits[i + 1]}"
 
 
 class TestCalculateCorrelationMultiplier:

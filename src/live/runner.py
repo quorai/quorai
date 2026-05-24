@@ -136,6 +136,7 @@ class LiveRunner:
         end_date = today.strftime("%Y-%m-%d")
 
         from src.orchestration.price_feed import LivePriceFeed  # lazy: avoids circular import via package __init__
+
         price_feed = LivePriceFeed()
 
         # 4. Fetch SPY for regime selection (~120-day lookback)

@@ -121,6 +121,7 @@ def test_daily_loss_limit_just_below_boundary(tmp_path):
 
 # --- Closing-trade notional exemption ---
 
+
 def test_sell_closing_long_exempt_from_notional_cap(tmp_path):
     """Selling all of a held long position bypasses the notional cap."""
     gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0)
@@ -166,8 +167,14 @@ def test_closing_sell_still_hits_daily_loss_limit(tmp_path):
     """Closing a long does not bypass the daily loss limit."""
     gate = _make_gate(tmp_path, MAX_ORDER_NOTIONAL=10_000.0, DAILY_LOSS_LIMIT_PCT=0.05)
     allowed, reason = _check(
-        gate, action="sell", side="sell", qty=100.0, price=300.0,
-        current_long=100.0, account_equity=90_000.0, sod_equity=100_000.0,
+        gate,
+        action="sell",
+        side="sell",
+        qty=100.0,
+        price=300.0,
+        current_long=100.0,
+        account_equity=90_000.0,
+        sod_equity=100_000.0,
     )
     assert allowed is False
     assert reason == "daily_loss_limit"
@@ -192,6 +199,7 @@ def test_backward_compat_no_position_args(tmp_path):
 
 # --- Missing / zero price guard (RV-01) ---
 
+
 def test_rejects_when_price_is_zero(tmp_path):
     gate = _make_gate(tmp_path)
     allowed, reason = _check(gate, price=0.0)
@@ -215,6 +223,7 @@ def test_missing_price_rejected_before_notional(tmp_path):
 
 
 # --- Kill-switch hot-reload (RV-02) ---
+
 
 def test_kill_switch_respected_after_settings_change(tmp_path, monkeypatch):
     """RV-02: kill switch toggled in .env after construction is picked up by the risk gate."""

@@ -191,7 +191,4 @@ def test_compute_metrics_called_once():
     ):
         engine.run_backtest()
 
-    assert engine._perf.compute_metrics.call_count == 1, (
-        f"compute_metrics called {engine._perf.compute_metrics.call_count} times "
-        f"(expected 1 — should be outside the date loop)"
-    )
+    assert engine._perf.compute_metrics.call_count == 1, f"compute_metrics called {engine._perf.compute_metrics.call_count} times (expected 1 — should be outside the date loop)"

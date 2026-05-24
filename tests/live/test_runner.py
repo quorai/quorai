@@ -58,9 +58,7 @@ def test_prepare_calls_to_snapshot_and_run_cycle(mock_pipeline_cls, mock_to_snap
 
     runner = _make_runner(broker)
 
-    with patch("src.live.runner.load_sod_equity", return_value=None), \
-         patch("src.live.runner.save_sod_equity") as mock_save, \
-         patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
+    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save, patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
         decisions, snapshot = runner.prepare()
 
     mock_to_snapshot.assert_called_once()
@@ -78,9 +76,7 @@ def test_sod_equity_saved_on_first_run(mock_pipeline_cls, mock_to_snapshot):
 
     runner = _make_runner(broker)
 
-    with patch("src.live.runner.load_sod_equity", return_value=None), \
-         patch("src.live.runner.save_sod_equity") as mock_save, \
-         patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
+    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save, patch("src.live.runner.now_ny", return_value=_PRE_OPEN):
         runner.prepare()
 
     mock_save.assert_called_once_with(95_000.0, log_dir="logs/live")
@@ -171,12 +167,9 @@ def test_execute_allow_queue_reconciles_normally_when_market_open():
     fake_executor.execute_decisions.return_value = {"AAPL": "submitted"}
 
     fake_reconciler = MagicMock()
-    fake_reconciler.reconcile.return_value = {
-        "ord-001": {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 200.0, "ticker": "AAPL"}
-    }
+    fake_reconciler.reconcile.return_value = {"ord-001": {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 200.0, "ticker": "AAPL"}}
 
-    with patch("src.live.runner.LiveExecutor", return_value=fake_executor), \
-         patch("src.live.reconciler.Reconciler", return_value=fake_reconciler):
+    with patch("src.live.runner.LiveExecutor", return_value=fake_executor), patch("src.live.reconciler.Reconciler", return_value=fake_reconciler):
         results = runner.execute({"AAPL": {"action": "sell", "quantity": 10}})
 
     assert "filled" in results["AAPL"]
@@ -193,9 +186,7 @@ def test_prepare_post_open_falls_back_gracefully(mock_pipeline_cls, mock_to_snap
 
     runner = _make_runner(broker)
 
-    with patch("src.live.runner.load_sod_equity", return_value=None), \
-         patch("src.live.runner.save_sod_equity") as mock_save, \
-         patch("src.live.runner.now_ny", return_value=_POST_OPEN):
+    with patch("src.live.runner.load_sod_equity", return_value=None), patch("src.live.runner.save_sod_equity") as mock_save, patch("src.live.runner.now_ny", return_value=_POST_OPEN):
         runner.prepare()
 
     mock_save.assert_called_once_with(92_000.0, log_dir="logs/live", allow_intraday=True)

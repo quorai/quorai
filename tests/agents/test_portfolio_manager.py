@@ -73,7 +73,7 @@ class TestComputeAllowedActions:
         result = compute_allowed_actions(
             tickers=["AAPL"],
             current_prices={"AAPL": 100.0},
-            max_shares={"AAPL": 5.0},       # long cap: 5 shares ($500 from cash)
+            max_shares={"AAPL": 5.0},  # long cap: 5 shares ($500 from cash)
             max_short_shares={"AAPL": 20.0},  # short cap: 20 shares (margin-derived)
             portfolio=_portfolio(
                 cash=500.0,
@@ -84,10 +84,7 @@ class TestComputeAllowedActions:
         long_cap = result["AAPL"].get("buy", 0)
         short_cap = result["AAPL"].get("short", 0)
         assert long_cap == pytest.approx(5.0), f"Expected buy=5.0, got {long_cap}"
-        assert short_cap > long_cap, (
-            f"Short capacity ({short_cap}) should exceed long capacity ({long_cap}) "
-            "when max_short_shares is higher than max_shares. F2 bug: max_short_shares ignored."
-        )
+        assert short_cap > long_cap, f"Short capacity ({short_cap}) should exceed long capacity ({long_cap}) when max_short_shares is higher than max_shares. F2 bug: max_short_shares ignored."
 
     def test_equity_fallback_uses_cash_when_equity_missing(self):
         """portfolio without 'equity' key falls back to cash for margin calculation (M13 known behaviour)."""

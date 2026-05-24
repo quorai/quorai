@@ -29,7 +29,7 @@ def test_bullet_as_stray_key_truncated():
     The regex fallback should recover signal, confidence, and the partial reasoning.
     """
     raw = (
-        '{\n'
+        "{\n"
         '  "signal": "neutral",\n'
         '  "confidence": 40,\n'
         '  "reasoning": "- Negative FCF yield fails margin of safety;",\n'
@@ -53,10 +53,7 @@ def test_unparseable_returns_none():
 
 
 def test_regex_extract_full():
-    content = (
-        '"signal": "bearish", "confidence": 30, '
-        '"reasoning": "- Low moat;", "- Expensive": ""'
-    )
+    content = '"signal": "bearish", "confidence": 30, "reasoning": "- Low moat;", "- Expensive": ""'
     result = _regex_field_extract(content)
     assert result["signal"] == "bearish"
     assert result["confidence"] == 30

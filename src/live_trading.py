@@ -62,22 +62,13 @@ def _parse_args() -> argparse.Namespace:
         "--allow-queue",
         action="store_true",
         dest="allow_queue",
-        help=(
-            "Allow running before market open on trading days. Orders are submitted as DAY market orders "
-            "and will queue for the opening cross. Skips reconciliation (no fill confirmation until open). "
-            "Still skips on weekends and holidays."
-        ),
+        help=("Allow running before market open on trading days. Orders are submitted as DAY market orders and will queue for the opening cross. Skips reconciliation (no fill confirmation until open). Still skips on weekends and holidays."),
     )
     parser.add_argument(
         "--catch-up",
         action="store_true",
         dest="catch_up",
-        help=(
-            "Missed-cron recovery: if no SOD equity file exists, fetch the prior-close equity "
-            "from Alpaca's portfolio history and use it as the loss-limit baseline. "
-            "Safe to use intraday; the fetched value is the true start-of-day baseline, "
-            "not the (potentially depressed) current equity."
-        ),
+        help=("Missed-cron recovery: if no SOD equity file exists, fetch the prior-close equity from Alpaca's portfolio history and use it as the loss-limit baseline. Safe to use intraday; the fetched value is the true start-of-day baseline, not the (potentially depressed) current equity."),
     )
     parser.add_argument("--confirm", action="store_true", help="Auto-confirm without interactive prompt")
     parser.add_argument(
@@ -185,9 +176,7 @@ def main() -> None:
     # Pre-flight: skip when the NYSE session is not currently open (pre-market, post-market, holidays)
     if not broker.is_market_open_today():
         if args.allow_queue and broker.is_trading_day():
-            logging.getLogger(__name__).info(
-                "Market not yet open — orders will be queued for the opening cross (--allow-queue)."
-            )
+            logging.getLogger(__name__).info("Market not yet open — orders will be queued for the opening cross (--allow-queue).")
         elif args.force:
             logging.getLogger(__name__).warning("Market is not currently open — continuing anyway (--force).")
         else:

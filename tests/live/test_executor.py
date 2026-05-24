@@ -445,8 +445,7 @@ def test_override_suffix_skips_error_entries(tmp_path, monkeypatch):
     ny_tz = ZoneInfo("America/New_York")
     fixed_now = datetime(2024, 1, 15, 10, 0, tzinfo=ny_tz)
 
-    with patch("src.live.executor.now_ny", return_value=fixed_now), \
-         patch("src.live.audit_journal.now_ny", return_value=fixed_now):
+    with patch("src.live.executor.now_ny", return_value=fixed_now), patch("src.live.audit_journal.now_ny", return_value=fixed_now):
         executor, broker, journal = _make_override_executor(tmp_path)
 
         # Pre-populate journal: prior attempt ended with error
@@ -504,8 +503,7 @@ def test_override_suffix_skips_rejected_entries(tmp_path, monkeypatch):
     ny_tz = ZoneInfo("America/New_York")
     fixed_now = datetime(2024, 1, 15, 10, 0, tzinfo=ny_tz)
 
-    with patch("src.live.executor.now_ny", return_value=fixed_now), \
-         patch("src.live.audit_journal.now_ny", return_value=fixed_now):
+    with patch("src.live.executor.now_ny", return_value=fixed_now), patch("src.live.audit_journal.now_ny", return_value=fixed_now):
         executor, broker, journal = _make_override_executor(tmp_path)
 
         journal.record(
@@ -596,8 +594,7 @@ def test_override_journal_scanned_once(tmp_path):
     ny_tz = ZoneInfo("America/New_York")
     fixed_now = datetime(2024, 1, 15, 10, 0, tzinfo=ny_tz)
 
-    with patch("src.live.executor.now_ny", return_value=fixed_now), \
-         patch("src.live.audit_journal.now_ny", return_value=fixed_now):
+    with patch("src.live.executor.now_ny", return_value=fixed_now), patch("src.live.audit_journal.now_ny", return_value=fixed_now):
         executor, broker, journal = _make_override_executor(tmp_path)
 
         with patch.object(journal, "list_all_today", wraps=journal.list_all_today) as mock_scan:
