@@ -9,10 +9,15 @@ agents) each produce a bullish/bearish/neutral signal per ticker. Those signals 
 debate node, then a risk manager, then a portfolio manager that emits final trading decisions.
 No real trades are executed.
 
-The repo has one active layer plus two planned future layers:
+The repo has one active layer plus two planned future layers, plus a shipped MCP server:
 
 - **`src/` — core library / CLI.** The agent graph, all analyst agents, data fetching (yfinance + Finnhub),
   disk-persisted caching, multi-provider LLM dispatch, and the backtesting engine.
+- **`src/mcp_server/` — MCP server.** Exposes `run_panel`, `list_analysts`, `get_analyst_info`, and
+  `run_single_analyst` as MCP tools. Installed by MCP hosts (Claude Code, Claude Desktop, Cursor, etc.)
+  via `uvx quorai-mcp`. The server is a thin async wrapper around `src.main.run_quorai` — no Quorai
+  core logic lives here. Uses `asyncio.Lock` to serialize concurrent panel invocations (LangGraph's
+  SQLite cache is not concurrency-safe across simultaneous runs).
 - **`app/` — web application *(not currently in the tree)*.** A planned FastAPI backend and React + ReactFlow
   frontend. The backend would build a LangGraph `StateGraph` from a visual canvas and stream execution
   progress to the browser over Server-Sent Events (SSE).
@@ -30,6 +35,7 @@ flowchart LR
     CLI["CLI\nsrc/main.py"]
     BT["Backtest CLI\nsrc/backtesting/cli.py"]
     BROWSER["Browser\nReact + Vite + ReactFlow\napp/frontend  :5173"]
+    MCP["MCP hosts\nClaude Code · Desktop\nCursor · Cline\nquorai-mcp  stdio"]
   end
 
   %% ---------- Web backend ----------
@@ -71,6 +77,7 @@ flowchart LR
 
   %% ---------- Connections ----------
   CLI --> GRAPHBUILD
+  MCP -- "stdio JSON-RPC\nrun_panel tool" --> GRAPHBUILD
   BT --> ENGINE
   BROWSER -- "REST + SSE\nPOST /quorai/run" --> ROUTES
   ROUTES --> SERVICES
@@ -97,6 +104,7 @@ flowchart LR
 |---|---|
 | `src/main.py` | CLI — single run via `run_quorai()`. Parses args with `src/cli/input.py`, builds and invokes the LangGraph, prints results via `src/utils/display.py`. |
 | `src/backtesting/cli.py` | Backtest CLI — subcommands: (default) single run, `compare` (A/B), `feedback` (label + score). |
+| `src/mcp_server/server.py` | MCP server — `quorai-mcp` console script. Four FastMCP tools: `run_panel`, `list_analysts`, `get_analyst_info`, `run_single_analyst`. Thin async wrapper around `run_quorai()`; `asyncio.Lock` serializes concurrent panel runs. |
 
 ---
 
@@ -423,6 +431,8 @@ Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
 |---|---|
 | CLI | `uv run python src/main.py --tickers AAPL,MSFT` |
 | Backtest | `uv run python -m src.backtesting --tickers AAPL,MSFT --model <model>` |
+| MCP server (PyPI) | `uvx quorai-mcp` — installed by MCP hosts via `claude mcp add quorai uvx quorai-mcp` |
+| MCP server (local dev) | `uv run quorai-mcp` — runs the server from a local checkout |
 | Docker | Planned — not yet present in the repository |
 
 ---

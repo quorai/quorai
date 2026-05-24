@@ -1,6 +1,6 @@
 [project]
 name = "quorai"
-version = "1.0.0"
+version = "1.1.0"
 description = "Quorai — a quorum of AI agents deliberating trading decisions."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,10 +39,12 @@ dependencies = [
     "alpaca-py>=0.30",
     "pydantic-settings>=2.0.0",
     "feedparser>=6.0.0",
+    "mcp[cli]>=1.12",
 ]
 
 [project.scripts]
 backtester = "src.backtesting.cli:main"
+quorai-mcp = "src.mcp_server.server:main"
 
 [dependency-groups]
 dev = [

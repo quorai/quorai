@@ -35,6 +35,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 - [Architecture](#architecture)
 - [Math & quantitative methods](#math--quantitative-methods)
 - [Setup](#setup)
+- [MCP server](#mcp-server)
 - [Usage](#usage)
   - [Backtesting](#backtesting)
   - [Live / Paper Trading](#live--paper-trading)
@@ -69,6 +70,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 - **Parallel per-ticker execution** — set `QUORAI_PARALLEL_TICKERS=N` to run N tickers concurrently via a thread pool (`src/utils/concurrency.py`)
 - **SEC EDGAR fundamentals** — point-in-time XBRL data via a local SQLite store (`.cache/sec_fundamentals.db`); eliminates yfinance look-ahead bias on historical share counts and financial statements. Seed with `experiments/seed_sec_fundamentals.py`; falls through to yfinance for unseeded tickers.
 - **Regime-gated allocation** — the portfolio manager deterministically filters proposed LLM actions by the detected SPY regime: `bull_trend` removes `short` when quant/growth groups are bullish; `bear_trend` removes `buy` when quant/quality groups are bearish; `risk_off` blocks both `buy` and `short`
+- **MCP server** — exposes the full analyst panel as a [Model Context Protocol](https://modelcontextprotocol.io) server (`quorai-mcp`); one-line install for Claude Code, Claude Desktop, Cursor, Cline, and any other MCP host
 
 ## How it works
 
@@ -343,6 +345,72 @@ uv run python experiments/seed_sec_fundamentals.py --dry-run --tickers AAPL
 ```
 
 The seeder respects the SEC's 10 req/s rate limit automatically. Tickers not in the cache are silently fetched from yfinance at run-time.
+
+## MCP server
+
+Quorai ships a [Model Context Protocol](https://modelcontextprotocol.io) server so any MCP-compatible AI tool — Claude Code, Claude Desktop, Cursor, Cline, Continue, VS Code Copilot — can invoke the analyst panel as a tool call.
+
+### Install
+
+**Claude Code (one-liner):**
+```bash
+claude mcp add quorai uvx quorai-mcp
+```
+
+**Claude Desktop / Cursor / any MCP host — add to your `mcpServers` config:**
+```json
+{
+  "mcpServers": {
+    "quorai": {
+      "command": "uvx",
+      "args": ["quorai-mcp"],
+      "env": {
+        "OPENROUTER_API_KEY": "your-key-here",
+        "FINNHUB_API_KEY": "your-key-here"
+      }
+    }
+  }
+}
+```
+
+The first cold-start with `uvx` downloads Quorai and its dependencies (~30–90 s). Subsequent starts are instant.
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `run_panel` | Run the full 25-analyst panel for one or more tickers. Returns signals, debate summary, risk assessment, and portfolio decisions. Takes 2–5 min per run. |
+| `list_analysts` | List all 25 analyst personas with their investing styles and strategy groups. |
+| `get_analyst_info` | Get full metadata for one analyst by key (e.g. `warren_buffett`). |
+| `run_single_analyst` | Run a single analyst and return its per-ticker signals. |
+
+### Routing analysts to specific models
+
+Pass `agent_models` to `run_panel` to override the LLM used per analyst. Keys are analyst keys (or `"*"` for all); values are `[model_slug, provider]`:
+
+```
+run_panel(
+  tickers=["AAPL", "NVDA"],
+  agent_models={"*": ["nousresearch/hermes-4-70b", "OpenRouter"]}
+)
+```
+
+Or use local Ollama (free, no API key needed):
+
+```
+run_panel(
+  tickers=["AAPL"],
+  agent_models={"*": ["hermes-4-70b", "Local"]}
+)
+```
+
+### Local dev (without PyPI)
+
+```bash
+claude mcp add quorai-dev "uv run --directory /path/to/quorai-app quorai-mcp"
+```
+
+---
 
 ## Usage
 
@@ -632,6 +700,7 @@ The paper-only hard-stop in `alpaca_client.py` is the base safety net. Running w
 | `src/notifications/` | Telegram approval client + command store |
 | `src/data/` | Disk-persisted cache (`cache.py`), Pydantic data models, SEC EDGAR XBRL store (`sec_store.py`) |
 | `src/llm/` | Multi-provider LLM dispatch, OpenRouter catalog |
+| `src/mcp_server/` | MCP server — `server.py` (FastMCP + asyncio.Lock), `tools.py` (pure helpers), `schemas.py` (Pydantic output models). Console script: `quorai-mcp`. |
 | `src/utils/` | Analyst registry (`ANALYST_CONFIG`), shared helpers |
 | `src/config.py` | Centralised env-var config via pydantic-settings |
 | `experiments/run_scenarios.py` | Regime evaluation harness — sweeps 10 period × ticker-set scenarios and writes a markdown report |
