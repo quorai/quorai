@@ -2,7 +2,7 @@ from datetime import date, datetime
 import logging
 import random
 import time
-from typing import cast
+from typing import Any, Callable, cast
 
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
@@ -28,7 +28,7 @@ def _resolve_side(side: str) -> OrderSide:
         raise ValueError(f"Unknown order side: {side!r}. Expected 'buy' or 'sell'.")
 
 
-def _retry_api_call(fn, *args, **kwargs):
+def _retry_api_call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Retry fn up to 3 times on transient 5xx or network errors.
 
     4xx errors (bad request, auth, duplicate client_order_id) are not retried —
@@ -175,7 +175,7 @@ class AlpacaClient:
         will queue for the opening cross, while still skipping weekends and holidays.
         """
         clock = _retry_api_call(self._client.get_clock)
-        return clock.is_open or (clock.next_open.date() == clock.timestamp.date())
+        return bool(clock.is_open or (clock.next_open.date() == clock.timestamp.date()))
 
     def get_sod_equity(self, date: date) -> float:
         """Return the prior-close equity for `date`, used as the SOD loss-limit baseline.

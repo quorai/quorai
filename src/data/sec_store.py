@@ -15,6 +15,10 @@ import logging
 from pathlib import Path
 import sqlite3
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.tools._yfinance_fundamentals import StatementBundle
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +124,7 @@ class _Bundle:
     shares_outstanding: float | None = None
 
 
-def _to_statement_bundle(b: _Bundle):
+def _to_statement_bundle(b: _Bundle) -> StatementBundle:
     """Convert an internal _Bundle to the public StatementBundle type.
 
     Mirrors the yfinance convention of injecting period_end into each section dict
@@ -128,15 +132,15 @@ def _to_statement_bundle(b: _Bundle):
     """
     from src.tools._yfinance_fundamentals import StatementBundle
 
-    income = {**b.income, "period_end": b.period_end}
-    balance = {**b.balance, "period_end": b.period_end}
-    cashflow = {**b.cashflow, "period_end": b.period_end}
+    income: dict[str, float | None] = {**b.income, "period_end": b.period_end}  # type: ignore[dict-item]
+    balance: dict[str, float | None] = {**b.balance, "period_end": b.period_end}  # type: ignore[dict-item]
+    cashflow: dict[str, float | None] = {**b.cashflow, "period_end": b.period_end}  # type: ignore[dict-item]
     return StatementBundle(
         period_end=b.period_end,
         income=income,
         balance=balance,
         cashflow=cashflow,
-        shares_outstanding=income.get("basic_shares_outstanding"),
+        shares_outstanding=b.income.get("basic_shares_outstanding"),
     )
 
 
@@ -193,7 +197,7 @@ class SecStore:
         except Exception:
             return False
 
-    def get_statements(self, ticker: str, period: str, end_date: str, limit: int):
+    def get_statements(self, ticker: str, period: str, end_date: str, limit: int) -> list[StatementBundle] | None:
         """Return a list of StatementBundles or None if the ticker is not seeded.
 
         None  → caller should fall through to yfinance.
@@ -229,7 +233,7 @@ class SecStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_period(self, ticker: str, period: str, end_date: str, limit: int):
+    def _get_period(self, ticker: str, period: str, end_date: str, limit: int) -> list[StatementBundle]:
         """Fetch up to `limit` annual or quarterly StatementBundles, newest-first."""
         with self._connect() as conn:
             # Get distinct period_ends where at least one fact was filed by end_date
@@ -264,7 +268,7 @@ class SecStore:
 
             return bundles
 
-    def _get_ttm(self, ticker: str, end_date: str, limit: int):
+    def _get_ttm(self, ticker: str, end_date: str, limit: int) -> list[StatementBundle]:
         """Compute TTM by summing trailing 4 quarters; append annual bundles for growth."""
         q_bundles = self._get_period(ticker, "quarterly", end_date, 4)
         if len(q_bundles) < 4:
@@ -307,9 +311,9 @@ class SecStore:
 
         from src.tools._yfinance_fundamentals import StatementBundle
 
-        ttm_income["period_end"] = most_recent_pe
-        ttm_balance["period_end"] = most_recent_pe
-        ttm_cashflow["period_end"] = most_recent_pe
+        ttm_income["period_end"] = most_recent_pe  # type: ignore[assignment]
+        ttm_balance["period_end"] = most_recent_pe  # type: ignore[assignment]
+        ttm_cashflow["period_end"] = most_recent_pe  # type: ignore[assignment]
         ttm_bundle = StatementBundle(
             period_end=most_recent_pe,
             income=ttm_income,

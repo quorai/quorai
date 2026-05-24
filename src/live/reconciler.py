@@ -9,7 +9,7 @@ from src.live.audit_journal import AuditJournal
 logger = logging.getLogger(__name__)
 
 
-def _parse_price(raw: str | None) -> float | None:
+def _parse_price(raw: str | float | None) -> float | None:
     if not raw:
         return None
     try:

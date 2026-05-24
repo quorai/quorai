@@ -285,6 +285,9 @@ class BacktestEngine:
                         for ticker in signal_prices:
                             try:
                                 df = self._prefetched_prices.get(ticker)
+                                if df is None:
+                                    fill_prices[ticker] = signal_prices[ticker]
+                                    continue
                                 # Fill at the open of the first available bar after current_date.
                                 # Exact-match on the calendar's "next business day" silently falls
                                 # back to same-bar close on NYSE holidays (no bar exists that day).
