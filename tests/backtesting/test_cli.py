@@ -60,6 +60,8 @@ def test_main_run_writes_cli_args_and_result_to_manifest(monkeypatch):
     ):
         bm = MagicMock()
         bm.get_return_pct.return_value = 5.0
+        bm.get_daily_returns.return_value = None
+        bm.get_basket_daily_returns.return_value = None
         engine_instance = MagicMock()
         engine_instance.run_backtest.return_value = fake_metrics
         engine_instance.get_portfolio_values.return_value = fake_values
