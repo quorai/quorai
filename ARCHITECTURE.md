@@ -9,7 +9,7 @@ agents) each produce a bullish/bearish/neutral signal per ticker. Those signals 
 debate node, then a risk manager, then a portfolio manager that emits final trading decisions.
 No real trades are executed.
 
-The repo has one active layer plus two planned future layers, plus a shipped MCP server:
+Two active layers:
 
 - **`src/` — core library / CLI.** The agent graph, all analyst agents, data fetching (yfinance + Finnhub),
   disk-persisted caching, multi-provider LLM dispatch, and the backtesting engine.
@@ -18,11 +18,6 @@ The repo has one active layer plus two planned future layers, plus a shipped MCP
   via `uvx quorai-mcp`. The server is a thin async wrapper around `src.main.run_quorai` — no Quorai
   core logic lives here. Uses `asyncio.Lock` to serialize concurrent panel invocations (LangGraph's
   SQLite cache is not concurrency-safe across simultaneous runs).
-- **`app/` — web application *(not currently in the tree)*.** A planned FastAPI backend and React + ReactFlow
-  frontend. The backend would build a LangGraph `StateGraph` from a visual canvas and stream execution
-  progress to the browser over Server-Sent Events (SSE).
-- **`v2/` — research module *(not currently in the tree)*.** A planned ground-up quant rebuild focused on
-  methodology over personality. The design is documented below for reference.
 
 ## Details
 
@@ -34,21 +29,14 @@ flowchart LR
   subgraph Clients
     CLI["CLI\nsrc/main.py"]
     BT["Backtest CLI\nsrc/backtesting/cli.py"]
-    BROWSER["Browser\nReact + Vite + ReactFlow\napp/frontend  :5173"]
+    LIVE["Live trading\nsrc/live_trading.py"]
     MCP["MCP hosts\nClaude Code · Desktop\nCursor · Cline\nquorai-mcp  stdio"]
-  end
-
-  %% ---------- Web backend ----------
-  subgraph WebBackend["FastAPI backend  app/backend  :8000"]
-    ROUTES["Routes\n/quorai/run  (SSE)\n/quorai/backtest  (SSE)\n/flows · /flow-runs\n/api-keys · /language-models"]
-    SERVICES["Services\ngraph.py · agent_service\nbacktest_service · portfolio\napi_key_service"]
-    REPOS["Repositories\nFlow / FlowRun / ApiKey"]
-    DB[("SQLite\nquorai.db\nAlembic migrations")]
   end
 
   %% ---------- Core library ----------
   subgraph Core["Core library  src/"]
     GRAPHBUILD["create_workflow\nsrc/main.py\nsrc/graph/state.py"]
+    PREFLIGHT["PipelineContext\nsrc/orchestration/preflight.py\n(regime + weights + signal log)"]
 
     subgraph LangGraph["LangGraph StateGraph"]
       START((start))
@@ -63,28 +51,28 @@ flowchart LR
       RISK --> PM --> ENDN
     end
 
-    PREFLIGHT["PipelineContext\nsrc/orchestration/preflight.py\n(regime + weights + signal log)"]
-
     API["Market data\nsrc/tools/api.py"]
     CACHE[("Disk cache\n.cache/api_cache.db")]
     LLMU["LLM dispatch\nsrc/llm/models.py\nsrc/utils/llm.py"]
     ENGINE["Backtest engine\nsrc/backtesting/\nengine · controller\nportfolio · trader\nmetrics · benchmarks"]
+    BROKER["Broker\nsrc/broker/alpaca_client.py"]
+    RISKGATE["RiskGate\nsrc/live/risk_gate.py"]
   end
 
   %% ---------- External ----------
   FINNHUB[("Finnhub API")]
-  LLMPROVIDERS[("LLM providers\nOpenAI · Anthropic · Groq\nDeepSeek · Gemini · xAI\nOpenRouter · Azure · Ollama · …")]
+  ALPACA[("Alpaca\npaper trading")]
+  LLMPROVIDERS[("LLM providers\nOpenAI · Anthropic · Groq\nDeepSeek · Gemini · xAI\nOpenRouter · Ollama · …")]
 
   %% ---------- Connections ----------
   CLI --> GRAPHBUILD
   MCP -- "stdio JSON-RPC\nrun_panel tool" --> GRAPHBUILD
   BT --> ENGINE
-  BROWSER -- "REST + SSE\nPOST /quorai/run" --> ROUTES
-  ROUTES --> SERVICES
-  SERVICES --> REPOS --> DB
-  SERVICES -- "imports src/ as library" --> GRAPHBUILD
-  SERVICES --> ENGINE
+  LIVE --> BROKER
+  LIVE --> PREFLIGHT
 
+  ENGINE --> PREFLIGHT
+  PREFLIGHT -- "one full graph\nper business day" --> GRAPHBUILD
   GRAPHBUILD --> START
   ANALYSTS --> API
   ANALYSTS --> LLMU
@@ -92,8 +80,8 @@ flowchart LR
   API --> CACHE
   API --> FINNHUB
   LLMU --> LLMPROVIDERS
-  ENGINE --> PREFLIGHT
-  PREFLIGHT -- "one full graph\nper business day" --> GRAPHBUILD
+  BROKER --> ALPACA
+  PREFLIGHT --> RISKGATE
 ```
 
 ---
@@ -367,61 +355,10 @@ The `compare` subcommand (`python -m src.backtesting compare`) accepts two prese
 
 ---
 
-### Web backend (`app/backend`)
-
-> **Not currently in the tree.** The `app/` directory is a planned feature. The design below is documented for reference.
-
-**Framework**: FastAPI, launched on `:8000`.
-
-**Key routes** (`app/backend/routes/`):
-
-| Route | Description |
-|---|---|
-| `POST /quorai/run` | SSE stream — builds LangGraph from posted canvas, runs it in a background executor, yields `start / progress / complete / error` events. |
-| `POST /quorai/backtest` | SSE stream — runs `BacktestService`, yields per-day results. |
-| `GET /quorai/agents` | Returns available analyst configs. |
-| `/flows`, `/flows/{id}/runs` | CRUD for saved React Flow canvases and their run history. |
-| `/api-keys` | CRUD for provider API keys (stored encrypted-at-rest in SQLite). |
-| `/language-models` | Proxies `src.llm.models.get_models_list()`. |
-
-**Services** (`app/backend/services/`):
-- `graph.py` — `create_graph()` builds a `StateGraph` from the canvas nodes/edges posted by the
-  frontend, wiring `portfolio_manager` and `risk_management`. Imports directly from `src.agents.*`.
-- `agent_service.py` — `create_agent_function` uses `functools.partial` to bind `agent_id`.
-- `portfolio.py` — builds the portfolio dict expected by the agent graph.
-- `backtest_service.py` — iterates trading days, calls `run_graph_async` per day.
-- `api_key_service.py` — loads active keys from DB to hydrate `request_data.api_keys`.
-
-Progress is delivered from `src/` to the SSE route via a pub/sub bus in `src/utils/progress.py`.
-
----
-
-### Frontend (`app/frontend`)
-
-> **Not currently in the tree.** See [Web backend](#web-backend-appbackend) note above.
-
-**Stack**: React 18 + Vite 5 + TypeScript + `@xyflow/react` (ReactFlow v12) + Tailwind + Radix UI.
-
-The canvas (`app/frontend/src/components/Flow.tsx`) lets the user drag analyst nodes and connect
-them to a portfolio manager node. On "Run", the frontend serialises the canvas into
-`{nodes, edges}` and POST-streams `/quorai/run` via `fetch` + `ReadableStream.getReader()`,
-parsing `event:`/`data:` SSE frames. Node status (IDLE / IN_PROGRESS / COMPLETE / ERROR) is
-updated in real time as each analyst completes.
-
-Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
-
----
-
 ### Persistence
 
-> **Partial.** The disk cache (`src/data/cache.py`) is active. The SQLite/SQLAlchemy layer belongs to `app/backend`, which is not currently in the tree.
-
-- **Database**: SQLite (`app/backend/quorai.db`), SQLAlchemy + Alembic migrations under
-  `app/backend/alembic/versions/`.
-- **Tables**: `quorai_flows` (canvas JSON), `quorai_flow_runs` (run metadata, results),
-  `quorai_flow_run_cycles` (per-day analyst signals, trades, portfolio snapshots),
-  `api_keys` (provider key storage).
-- **Data cache**: pickle file at `.cache/api_cache.pkl` (managed by `src/data/cache.py`).
+- **Data cache**: SQLite at `.cache/api_cache.db` (managed by `src/data/cache.py`; thread-safe atomic writes via tmp + replace).
+- **SEC fundamentals cache**: SQLite at `.cache/sec_fundamentals.db` (seeded by `experiments/seed_sec_fundamentals.py`; exposes point-in-time XBRL data via `src/data/sec_store.py`).
 
 ---
 
@@ -433,7 +370,6 @@ Backend base URL: `import.meta.env.VITE_API_URL || 'http://localhost:8000'`.
 | Backtest | `uv run python -m src.backtesting --tickers AAPL,MSFT --model <model>` |
 | MCP server (PyPI) | `uvx quorai-mcp` — installed by MCP hosts via `claude mcp add quorai uvx quorai-mcp` |
 | MCP server (local dev) | `uv run quorai-mcp` — runs the server from a local checkout |
-| Docker | Planned — not yet present in the repository |
 
 ---
 
@@ -480,29 +416,6 @@ The live signal log feeds the same `feedback/labeler.py → scorer.py → weight
 |---|---|---|
 | `--use-regime-selection` | off | Narrow analysts to regime-appropriate groups via SPY classification |
 | `--use-conviction-weights` | off | Apply per-agent weights from `src/feedback/weights.json` |
-| `--no-signal-log` | (log on) | Suppress writing `logs/signals-live-YYYY-MM-DD.jsonl` |
+| `--no-signal-log` | (log on) | Suppress writing `logs/live/signals/signals-YYYY-MM-DD-live.jsonl` |
 | `--risk-profile` | `balanced` | Risk preset — sets position-sizing `base_limit` and `RiskGate` caps. Options: `conservative`, `cautious`, `balanced`, `aggressive`, `speculative`. Defined in `src/risk_profiles.py`. |
 
-> **Docker**: Docker support (`docker/docker-compose.yml`) is planned but not yet present in this repository.
-
----
-
-### v2 research module
-
-> **Not currently in the tree.** `v2/` is a planned ground-up quant rebuild; the design is documented here for reference.
-
-`v2/` is an aspirational ground-up quant rebuild ("methodology over personality"). It is
-**≈95% empty scaffolding**. Planned modules (`data`, `event_study`, `features`, `validation`,
-`backtesting`, `portfolio`, `risk`, `pipeline`) contain only docstring stubs.
-
-Live code:
-
-- `v2/signals/base.py` — `BaseSignal` ABC and `SIGNAL_REGISTRY` dict.
-- `v2/signals/trivial.py` — `TrivialSignal(BaseSignal)` always returns 0.0; used to validate
-  the signal pipeline contract.
-- `v2/models.py` — Pydantic schemas: `SignalResult`, `QuantSignals`, `PortfolioTarget`,
-  `TradeOrder`, `ExecutionResult`.
-- `v2/run_signal.py` — standalone signal runner (`python v2/run_signal.py --signal trivial
-  --ticker AAPL --date 2026-02-28`).
-
-`v2/` is not referenced by `src/` or `app/`.

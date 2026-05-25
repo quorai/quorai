@@ -55,7 +55,7 @@ def _ctx(**overrides) -> PipelineContext:
 # ---------------------------------------------------------------------------
 
 
-@patch("src.orchestration.preflight._atomic_json_write")
+@patch("src.orchestration.preflight.atomic_json_write")
 @patch("src.orchestration.preflight.SignalLogger")
 def test_build_opens_signal_logger(mock_logger_cls, _mock_write):
     ctx = PipelineContext.build(
@@ -70,7 +70,7 @@ def test_build_opens_signal_logger(mock_logger_cls, _mock_write):
     assert ctx.signal_log_path is not None
 
 
-@patch("src.orchestration.preflight._atomic_json_write")
+@patch("src.orchestration.preflight.atomic_json_write")
 @patch("src.orchestration.preflight.SignalLogger")
 def test_build_skips_signal_logger_when_disabled(mock_logger_cls, _mock_write):
     ctx = PipelineContext.build(
@@ -85,7 +85,7 @@ def test_build_skips_signal_logger_when_disabled(mock_logger_cls, _mock_write):
     assert ctx.signal_log_path is None
 
 
-@patch("src.orchestration.preflight._atomic_json_write")
+@patch("src.orchestration.preflight.atomic_json_write")
 @patch("src.orchestration.preflight.load_weights", return_value={"buffett": 0.8})
 @patch("src.orchestration.preflight.SignalLogger")
 def test_build_loads_conviction_weights(mock_logger_cls, mock_load_weights, _mock_write):
@@ -101,7 +101,7 @@ def test_build_loads_conviction_weights(mock_logger_cls, mock_load_weights, _moc
     assert ctx._conviction_weights == {"buffett": 0.8}
 
 
-@patch("src.orchestration.preflight._atomic_json_write")
+@patch("src.orchestration.preflight.atomic_json_write")
 @patch("src.orchestration.preflight.load_weights", return_value={})
 @patch("src.orchestration.preflight.SignalLogger")
 def test_build_skips_load_weights_when_not_enabled(mock_logger_cls, mock_load_weights, _mock_write):
@@ -317,7 +317,7 @@ def test_token_summary_returns_empty_when_no_cycles():
     assert summary["manifest_write_failures"] == 0
 
 
-@patch("src.orchestration.preflight._atomic_json_write", side_effect=OSError("disk full"))
+@patch("src.orchestration.preflight.atomic_json_write", side_effect=OSError("disk full"))
 def test_bundle_write_failure_counted(_mock_write):
     ctx = _ctx()
     ctx.run_cycle(date="2026-01-15", lookback_start="2025-12-15", portfolio=_portfolio(), signal_prices={})
@@ -325,7 +325,7 @@ def test_bundle_write_failure_counted(_mock_write):
     assert ctx._cycle_files == [], "failed write must not be appended to _cycle_files"
 
 
-@patch("src.orchestration.preflight._atomic_json_write", side_effect=OSError("disk full"))
+@patch("src.orchestration.preflight.atomic_json_write", side_effect=OSError("disk full"))
 def test_token_summary_includes_failure_count(_mock_write):
     ctx = _ctx()
     ctx.run_cycle(date="2026-01-15", lookback_start="2025-12-15", portfolio=_portfolio(), signal_prices={})

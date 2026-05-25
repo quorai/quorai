@@ -15,7 +15,7 @@ uv run ruff check .
 # Format
 uv run ruff format .
 
-# Type check
+# Type check (enforced subset — src/agents/* is intentionally excluded)
 uv run mypy src/broker src/live src/data src/backtesting src/config.py
 ```
 

@@ -3,9 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import logging
-import os
 from pathlib import Path
-import tempfile
 from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
@@ -17,6 +15,7 @@ from src.feedback.loader import load_weights
 from src.llm.request import RunRequest
 from src.regime import classify_regime_with_indicators, select_analysts_for_regime
 from src.risk_profiles import RiskProfile
+from src.utils.atomic_io import atomic_json_write
 
 if TYPE_CHECKING:
     from src.backtesting.portfolio import Portfolio
@@ -60,23 +59,6 @@ def _extract_risk_manager(analyst_signals: dict) -> dict:
     return result
 
 
-def _atomic_json_write(path: Path, obj: object) -> None:
-    """Serialize obj to JSON and replace path atomically."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(obj, indent=2, default=str)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.replace(tmp, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
 def update_run_manifest(run_id: str, patch: dict, log_dir: str = "logs") -> None:
     """Shallow-merge *patch* into logs/runs/<run_id>.json atomically. No-op if manifest is absent."""
     manifest_path = Path(log_dir) / "runs" / f"{run_id}.json"
@@ -86,7 +68,7 @@ def update_run_manifest(run_id: str, patch: dict, log_dir: str = "logs") -> None
         with open(manifest_path, encoding="utf-8") as fh:
             manifest = json.load(fh)
         manifest.update(patch)
-        _atomic_json_write(manifest_path, manifest)
+        atomic_json_write(manifest_path, manifest)
     except Exception:
         logger.exception("Failed to update run manifest for run=%s", run_id)
 
@@ -361,7 +343,7 @@ class PipelineContext:
 
             cycles_dir = Path(self._log_dir) / "cycles" / self._run_id
             bundle_path = cycles_dir / f"cycle-{date}.json"
-            _atomic_json_write(bundle_path, bundle)
+            atomic_json_write(bundle_path, bundle)
             self._last_cycle_path = bundle_path
 
             rel_path = str(bundle_path)
@@ -389,7 +371,7 @@ class PipelineContext:
             bundle["fill_prices"] = fill_prices
             bundle["trades"] = executed_trades
             bundle["portfolio_after"] = _portfolio_to_dict(portfolio_after)
-            _atomic_json_write(cycle_path, bundle)
+            atomic_json_write(cycle_path, bundle)
         except Exception:
             logger.exception("Failed to finalize cycle bundle for run=%s date=%s", self._run_id, date)
 
@@ -430,7 +412,7 @@ class PipelineContext:
             }
             runs_dir = Path(self._log_dir) / "runs"
             manifest_path = runs_dir / f"{self._run_id}.json"
-            _atomic_json_write(manifest_path, manifest)
+            atomic_json_write(manifest_path, manifest)
         except Exception:
             self._manifest_write_failures += 1
             logger.exception("Failed to write run manifest for run=%s", self._run_id)
@@ -458,7 +440,7 @@ class PipelineContext:
                 with open(manifest_path, encoding="utf-8") as fh:
                     manifest = json.load(fh)
                 manifest["finished_at"] = _utcnow_iso()
-                _atomic_json_write(manifest_path, manifest)
+                atomic_json_write(manifest_path, manifest)
         except Exception:
             logger.exception("Failed to finalize run manifest for run=%s", self._run_id)
 

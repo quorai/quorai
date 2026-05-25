@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta
+import logging
 import random
 import sys
 
@@ -147,8 +148,6 @@ def _main_run(argv: list[str]) -> int:
     np.random.seed(args.seed)
 
     start_date, end_date = _resolve_dates(args)
-
-    import logging
 
     import pandas as pd
 

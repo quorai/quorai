@@ -33,7 +33,6 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 - [How it works](#how-it-works)
 - [Analyst roster](#analyst-roster)
 - [Architecture](#architecture)
-- [Math & quantitative methods](#math--quantitative-methods)
 - [Setup](#setup)
 - [MCP server](#mcp-server)
 - [Usage](#usage)
@@ -42,9 +41,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
   - [Telegram approval gate](#telegram-approval-gate)
   - [Experiments](#experiments)
 - [Safety mechanisms](#safety-mechanisms)
-- [Project structure](#project-structure)
 - [Running tests](#running-tests)
-- [Adding an analyst](#adding-an-analyst)
 - [Troubleshooting](#troubleshooting)
 - [Python version](#python-version)
 - [Changelog](#changelog)
@@ -57,7 +54,7 @@ The `backtester` console script is installed by `uv sync`. For all options see [
 
 - **25 analyst agents** — value, growth, macro, technical, fundamentals, sentiment, risk, and more
 - **Famous investor personas** — simulations of Buffett, Munger, Ackman, Burry, Wood, Dalio, Simons, Lynch, and others
-- **Multi-provider LLM support** — OpenAI, Anthropic, Groq, Gemini, DeepSeek, xAI, OpenRouter, Ollama (local)
+- **14 LLM providers** — OpenAI, Anthropic, Groq, Gemini, DeepSeek, xAI, OpenRouter, Ollama (local), Alibaba, Azure OpenAI, GigaChat, Meta, Mistral, Kimi
 - **Backtesting engine** — replay historical data with full agent deliberation and portfolio metrics
 - **Live / paper trading** — execute via Alpaca with optional Telegram approval gate
 - **Group-level debate node** — collapses 25 analyst signals into 6 strategy groups via confidence-weighted aggregation; an LLM moderator summarises contested tickers
@@ -173,128 +170,7 @@ The debate node (`src/agents/debate_node.py`) runs in two phases:
 
 Individual agents do not argue with each other; the "debate" is between the six group-level positions, and only contested tickers incur the extra LLM call.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design — data layer, LLM dispatch, backtesting internals, regime classifier, conviction-weight feedback loop, token telemetry, live trading layer, and per-ticker parallelism.
-
-## Math & quantitative methods
-
-This section documents the quantitative formulas used throughout the codebase. All annualisation uses 252 trading days.
-
-### Portfolio metrics (`src/backtesting/metrics.py`)
-
-| Metric | Formula |
-|---|---|
-| Daily return | `(price_t − price_{t−1}) / price_{t−1}` |
-| Excess return | `daily_return − risk_free_rate / 252`  (RF = 4.34% annual) |
-| Sharpe ratio | `√252 × mean(excess) / std(excess)` |
-| Sortino ratio | `√252 × mean(excess) / √mean(min(excess, 0)²)` |
-| Max drawdown | `(value_t − max(value_{0..t})) / max(value_{0..t})` — tracked as a running peak |
-| Total return | `(final_value / initial_capital − 1) × 100%` |
-| Benchmark return | `(SPY_last / SPY_first − 1) × 100%` (buy-and-hold over the same window) |
-| Alpha vs SPY | `strategy_total_return − SPY_total_return` |
-| Alpha vs basket | `strategy_total_return − equal_weight_basket_total_return` |
-| Information ratio vs SPY | `√252 × mean(daily_active_return) / std(daily_active_return)` where `active_return = strategy_return − SPY_return` |
-| Information ratio vs basket | Same formula with `active_return = strategy_return − equal_weight_basket_return` |
-
-### Portfolio exposure (`src/backtesting/valuation.py`)
-
-| Metric | Formula |
-|---|---|
-| NAV | `cash + Σ(long_shares × price) − Σ(short_shares × price)` |
-| Long exposure | `Σ(long_shares × price)` |
-| Short exposure | `Σ(short_shares × price)` |
-| Gross exposure | `long + short` |
-| Net exposure | `long − short` |
-| L/S ratio | `long / short` |
-| Weighted-average cost basis | `(old_basis × old_qty + new_price × new_qty) / total_qty` (updated on every fill) |
-
-### Position sizing (`src/agents/risk_manager.py`)
-
-The risk manager derives a per-ticker notional limit in two steps:
-
-1. **Volatility adjustment** — annualised vol `= std(60-day returns) × √252`:
-
-   | Annualised vol | Multiplier |
-   |---|---|
-   | < 15% | 1.25× |
-   | 15–30% | `1.0 − (vol − 0.15) × 0.5` |
-   | 30–50% | `0.75 − (vol − 0.30) × 0.5` |
-   | > 50% | 0.50× |
-
-2. **Correlation adjustment** — average correlation with existing open positions:
-
-   | Avg correlation | Multiplier |
-   |---|---|
-   | ≥ 0.80 | 0.70× |
-   | 0.60–0.80 | 0.85× |
-   | 0.40–0.60 | 1.00× |
-   | 0.20–0.40 | 1.05× |
-   | < 0.20 | 1.10× |
-
-   Final limit: `base_limit × vol_multiplier × corr_multiplier`
-
-   Cash/margin constraints are applied last: `max_long = min(position_limit, available_cash)`, `max_short = min(position_limit, available_margin)` where `available_margin = equity / margin_requirement − margin_used`.
-
-### Valuation models (`src/agents/valuation.py`)
-
-**Owner earnings (Buffett)**
-`owner_earnings = net_income + D&A − capex − Δworking_capital`
-Projected forward for 10 years then discounted; terminal value uses a Gordon Growth model. A 25 % margin of safety is applied to the resulting intrinsic value.
-
-**DCF (free cash flow)**
-`intrinsic = Σ_{t=1}^{n} FCF_t / (1+r)^t + TV / (1+r)^n`  
-Terminal value: `TV = FCF_n × (1 + g_terminal) / (r − g_terminal)`
-
-**Multi-stage DCF** — three growth phases discounted at WACC, with a quality adjustment:
-`quality_factor = max(0.7, 1 − fcf_volatility × 0.5)` where `fcf_volatility = std(FCF) / mean(FCF)` (coefficient of variation).
-A scenario overlay applies bear/base/bull growth assumptions weighted 20 / 60 / 20 %.
-
-**EV/EBITDA cross-check**
-`implied_equity = median_sector_EV/EBITDA × current_EBITDA − net_debt`
-
-**Residual income (Edwards-Bell-Ohlson)**
-`RI_t = net_income_t − cost_of_equity × book_value_{t−1}`
-`intrinsic = book_value + Σ PV(RI_t) + PV(terminal_RI)`
-
-**WACC**
-`cost_of_equity = RF + β × MRP`  (RF = 4.5 %, MRP = 6 %, β from TTM metrics)  
-`cost_of_debt = max(RF + 0.01, RF + 10 / interest_coverage)`  
-`WACC = (E/V) × CoE + (D/V) × CoD × (1 − 0.25)`, floored at 6 % and capped at 20 %.
-
-**Blended signal**
-The four methods are weighted DCF 35 %, Owner Earnings 35 %, EV/EBITDA 20 %, Residual Income 10 %. The resulting valuation gap `= (weighted_intrinsic − market_cap) / market_cap` drives the bullish/neutral/bearish signal (thresholds ±15 %).
-
-### Technical indicators (`src/agents/technicals.py`, `src/agents/jim_simons.py`)
-
-| Indicator | Formula / Definition |
-|---|---|
-| EMA | `close.ewm(span=N, adjust=False).mean()` |
-| RSI | `100 − 100 / (1 + avg_gain / avg_loss)` over 14 periods |
-| Bollinger Bands | `SMA(20) ± 2 × σ(20)` |
-| Z-score | `(price − MA) / σ` — signals at ±2 |
-| ADX | `EWM(DX)` where `DX = 100 × |DI+ − DI−| / (DI+ + DI−)`, `DI± = 100 × smoothed_DM± / smoothed_TR` |
-| ATR | `SMA(true_range, 14)` where `TR = max(H−L, |H−C_{prev}|, |L−C_{prev}|)` |
-| Momentum (1/3/6 m) | `returns.rolling(21/63/126).sum()`, blended as `0.4×mom_1m + 0.3×mom_3m + 0.3×mom_6m` |
-| 12-1 momentum (AQR) | `(price_{−21d} − price_{−252d}) / price_{−252d}` — skips the most recent month to avoid short-term reversal |
-| Hurst exponent | OLS slope of `log(lag)` vs `log(std(returns at lag))`; H < 0.5 → mean-reverting, H > 0.5 → trending |
-| Lag-1 autocorrelation | `corr(returns[:-1], returns[1:])` — negative ACF supports mean-reversion entry |
-| Volume spike | `current_volume / SMA(volume, 21)` — > 2× on a down day flags potential capitulation |
-
-The final technical signal is a weighted sum: Trend 25 %, Mean Reversion 20 %, Momentum 25 %, Volatility 15 %, Stat-Arb 15 %; mapped to bullish/bearish via a ±0.2 threshold.
-
-### AQR multi-factor scoring (`src/agents/cliff_asness.py`)
-
-| Factor | Key sub-signals | Max pts |
-|---|---|---|
-| Value | P/E, P/B, FCF yield, EV/EBITDA vs thresholds | 8 |
-| Momentum | 12-1 momentum vs ±5 % / ±20 % thresholds; −1 if 1-month gain > 15 % | 4 |
-| Quality | ROIC, gross margin, earnings stability (% positive years) | 6 |
-| Low volatility | 63-day annualised vol bucketed into five tiers | 4 |
-
-Overall signal strength scales with how many factors align simultaneously (max 22 pts → 90–100 % confidence).
-
-### Conviction-weight feedback loop (`src/feedback/`)
-
-After each run, signals are labeled with 1 d / 5 d / 20 d forward returns. The rolling directional hit-rate for each agent is used to upweight high-accuracy agents in the debate aggregation. Weights are persisted in `src/feedback/weights.json` and reloaded at the start of the next run when `--use-conviction-weights` is set.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design — data layer, LLM dispatch, backtesting internals, regime classifier, conviction-weight feedback loop, token telemetry, live trading layer, and per-ticker parallelism. See [docs/math.md](docs/math.md) for all quantitative formulas.
 
 ## Setup
 
@@ -474,76 +350,7 @@ Flags:
 
 Writes `src/feedback/weights.json` and `accuracy_report.json`. Re-run backtesting with `--use-conviction-weights` to apply the computed weights.
 
-#### Reading the backtest output
-
-The engine prints two blocks of output.
-
-**Rolling `PORTFOLIO SUMMARY`** — printed at the end of each trading day:
-
-```
-PORTFOLIO SUMMARY:
-Cash Balance: $136,342.28        ← uninvested cash
-Total Position Value: $-36,520.48  ← market value of open positions (negative = net short)
-Total Value: $99,821.80          ← cash + position value = current portfolio NAV
-Portfolio Return: -0.18%         ← return vs starting capital since inception
-Benchmark Return: +0.77%         ← S&P 500 return over the same period
-Sharpe Ratio: -4.58              ← risk-adjusted return (annualised); see below
-Sortino Ratio: -6.01             ← like Sharpe but only penalises downside volatility
-Max Drawdown: -0.74%             ← largest peak-to-trough decline so far
-```
-
-At the end of the run three final blocks are printed:
-
-**`ENGINE RUN COMPLETE`** — core metrics:
-
-```
-ENGINE RUN COMPLETE
-Total Return: -0.18%
-Sharpe: -2.25
-Sortino: -3.00
-Max DD: 0.74% on 2026-05-08
-```
-
-**`BASELINES`** — buy-and-hold returns over the same window:
-
-```
-BASELINES (2026-04-22 → 2026-05-22)
-  SPY:                  +1.12%
-  AAPL:                 +0.85%
-  MSFT:                 +2.31%
-  Equal-weight (AAPL,MSFT):  +1.58%
-```
-
-**`ACTIVE PERFORMANCE`** — strategy performance vs benchmarks:
-
-```
-ACTIVE PERFORMANCE
-  Strategy:                      -0.18%
-  Alpha vs SPY:                  -1.30%   ← strategy total return − SPY total return
-  Alpha vs Equal-weight basket:  -0.45%   ← strategy − equal-weight ticker basket
-  IR vs SPY:                     -0.83    ← (mean active daily return / std) × √252
-  IR vs Equal-weight basket:     -0.61
-```
-
-> The Sharpe/Sortino in the final summary may differ slightly from the last rolling figure because the two blocks use marginally different timing for their calculation windows.
-
-**Interpreting the metrics**
-
-| Metric | Good | Acceptable | Poor |
-|---|---|---|---|
-| Portfolio Return | Beats benchmark | Roughly flat vs benchmark | Lags benchmark |
-| Sharpe Ratio | > 1.0 | 0 – 1.0 | < 0 |
-| Sortino Ratio | > 1.5 | 0 – 1.5 | < 0 |
-| Max Drawdown | < 10% | 10 – 20% | > 20% |
-| Alpha vs SPY | > 0% | ~ 0% | < 0% |
-| IR vs SPY | > 0.5 | 0 – 0.5 | < 0 |
-| IR vs basket | > 0.5 | 0 – 0.5 | < 0 |
-
-**Important caveats for short backtests**
-
-- Sharpe and Sortino are annualised from daily returns. With only a few days of data there are too few samples for the figures to be statistically meaningful — treat them as noise until the test window covers at least several months.
-- A negative `Total Position Value` means the portfolio manager issued net short orders. This is valid behaviour but unusual; check `--show-reasoning` to understand why.
-- Always compare against the benchmark return over the *same* period before drawing conclusions.
+See [docs/backtest-output.md](docs/backtest-output.md) for a guide to reading and interpreting the output metrics.
 
 ### Live / Paper Trading
 
@@ -575,13 +382,6 @@ Key flags:
 - `--force` — skip the market-open check entirely (useful for development/testing)
 - `--margin-requirement` — margin requirement fraction (default: 0.0)
 - `--temperature` — LLM temperature override
-
-After each run the console prints:
-
-```
-Signal log: logs/signals-live-2026-05-12.jsonl
-Tokens: 12 calls, 84 200 in / 3 100 out
-```
 
 The signal JSONL feeds the same `feedback/labeler.py → scorer.py → weights.json` pipeline used in backtesting, so conviction weights improve over time as live-run history accumulates.
 
@@ -684,29 +484,6 @@ Individual caps are still overridable via env vars (see `src/config.py`). The `-
 
 The paper-only hard-stop in `alpaca_client.py` is the base safety net. Running with `--require-approval` adds a human-in-the-loop gate on top of it. The limitations above are documented, not fixed.
 
-## Project structure
-
-| Path | Purpose |
-|---|---|
-| `src/main.py` | `run_quorai()` — single-run entry point; `create_workflow()` — LangGraph builder |
-| `src/live_trading.py` | Live/paper trading CLI entry point |
-| `src/agents/` | 25 analyst agents (personality + quant) plus risk manager and portfolio manager |
-| `src/backtesting/` | Engine, portfolio, metrics, CLI (`backtester` / `python -m src.backtesting [compare]`), signal log, A/B harness |
-| `src/orchestration/` | `PipelineContext` — pre-graph helper shared by live and backtest |
-| `src/regime/` | `MarketRegime` classifier + analyst-selection policy |
-| `src/feedback/` | Forward-return labeler, rolling per-agent scorer, weights loader |
-| `src/broker/` | `Broker` protocol + Alpaca client |
-| `src/live/` | Live executor, runner, risk gate, audit journal |
-| `src/notifications/` | Telegram approval client + command store |
-| `src/data/` | Disk-persisted cache (`cache.py`), Pydantic data models, SEC EDGAR XBRL store (`sec_store.py`) |
-| `src/llm/` | Multi-provider LLM dispatch, OpenRouter catalog |
-| `src/mcp_server/` | MCP server — `server.py` (FastMCP + asyncio.Lock), `tools.py` (pure helpers), `schemas.py` (Pydantic output models). Console script: `quorai-mcp`. |
-| `src/utils/` | Analyst registry (`ANALYST_CONFIG`), shared helpers |
-| `src/config.py` | Centralised env-var config via pydantic-settings |
-| `experiments/run_scenarios.py` | Regime evaluation harness — sweeps 10 period × ticker-set scenarios and writes a markdown report |
-| `experiments/seed_sec_fundamentals.py` | Seeds `.cache/sec_fundamentals.db` from SEC EDGAR XBRL; requires `QUORAI_SEC_USER_AGENT` |
-| `tests/` | Unit and integration tests |
-
 ## Running tests
 
 ```bash
@@ -714,13 +491,6 @@ uv run python -m pytest
 ```
 
 > Use `python -m pytest`, not `uv run pytest` — the latter invokes a stale venv shebang that resolves to the wrong Python.
-
-## Adding an analyst
-
-1. Create `src/agents/my_analyst.py` with a `my_analyst_agent(state, agent_id)` function.
-2. Register it in `src/utils/analysts.py` — add an entry to `ANALYST_CONFIG`.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines.
 
 ## Troubleshooting
 

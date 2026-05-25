@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+from src.utils.atomic_io import atomic_json_write
+
 # Agents with very lucky or unlucky streaks are clamped to this range so no
 # single analyst can dominate or be silenced by the conviction-weighting system.
 _WEIGHT_MIN = float(os.environ.get("QUORAI_AGENT_WEIGHT_MIN", "0.1"))
@@ -20,14 +22,6 @@ def _is_hit(signal: str, forward_return: float | None) -> bool | None:
     if signal == "bearish":
         return forward_return < 0
     return None  # neutral signals are excluded from scoring
-
-
-def _atomic_json_write(path: str, data: object) -> None:
-    """Write JSON to a temp file then rename, avoiding partial-read races."""
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
 
 
 def compute_weights(
@@ -83,7 +77,7 @@ def compute_weights(
         weights = {agent: max(_WEIGHT_MIN, min(_WEIGHT_MAX, w / mean_w)) for agent, w in raw_weights.items()}
 
     Path(weights_path).parent.mkdir(parents=True, exist_ok=True)
-    _atomic_json_write(weights_path, weights)
+    atomic_json_write(weights_path, weights)
 
     report = {
         agent: {
@@ -93,6 +87,6 @@ def compute_weights(
         }
         for agent in sorted(weights)
     }
-    _atomic_json_write(report_path, report)
+    atomic_json_write(report_path, report)
 
     return weights

@@ -63,6 +63,7 @@ outputs/
 
 # Logs
 logs/
+experiments/results/logs/
 
 # Database files (users will have their own local databases)
 *.db

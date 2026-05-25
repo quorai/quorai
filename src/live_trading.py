@@ -176,11 +176,11 @@ def main() -> None:
     # Pre-flight: skip when the NYSE session is not currently open (pre-market, post-market, holidays)
     if not broker.is_market_open_today():
         if args.allow_queue and broker.is_trading_day():
-            logging.getLogger(__name__).info("Market not yet open — orders will be queued for the opening cross (--allow-queue).")
+            log.info("Market not yet open — orders will be queued for the opening cross (--allow-queue).")
         elif args.force:
-            logging.getLogger(__name__).warning("Market is not currently open — continuing anyway (--force).")
+            log.warning("Market is not currently open — continuing anyway (--force).")
         else:
-            logging.getLogger(__name__).info("Market is not currently open — skipping run. Use --force to override.")
+            log.info("Market is not currently open — skipping run. Use --force to override.")
             return
 
     # Pre-flight: check Telegram command inbox

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Portions adapted from virattt/ai-hedge-fund (MIT). See THIRD_PARTY_NOTICES.md.
 import json
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -649,7 +650,7 @@ def _r(x, n=3):
         return None
 
 
-def make_munger_facts_bundle(analysis: dict[str, any]) -> dict[str, any]:
+def make_munger_facts_bundle(analysis: dict[str, Any]) -> dict[str, Any]:
     moat = analysis.get("moat_analysis") or {}
     mgmt = analysis.get("management_analysis") or {}
     pred = analysis.get("predictability_analysis") or {}
@@ -741,7 +742,7 @@ def compute_confidence(analysis: dict, signal: str) -> int:
 
 def generate_munger_output(
     ticker: str,
-    analysis_data: dict[str, any],
+    analysis_data: dict[str, Any],
     state: AgentState,
     agent_id: str,
     confidence_hint: int,

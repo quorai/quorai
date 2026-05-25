@@ -30,7 +30,9 @@ _PERSONA = (
     "- Use a growth-biased valuation approach.\n"
     "- Provide a data-driven recommendation (bullish, bearish, or neutral).\n"
     "\n"
-    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. Stay in Cathie Wood\'s optimistic, future-focused, conviction-driven voice — one concrete fact, metric, or judgment per bullet. No prose paragraphs.'
+    'When writing the reasoning field, use a short bullet list. Each bullet starts with "- " on its own line. '
+    "Prefer 2–3 bullets, never exceed 5. Each bullet under ~100 chars. "
+    "Stay in Cathie Wood's optimistic, future-focused, conviction-driven voice — one concrete fact, metric, or judgment per bullet. No prose paragraphs."
 )
 
 

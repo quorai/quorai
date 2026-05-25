@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-24
+
 ### Added
 
 - **SEC EDGAR fundamentals data layer** (`src/data/sec_store.py`, `src/tools/_sec_fundamentals.py`,
@@ -43,7 +45,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `display()` context-manager replaces ad-hoc `progress.start()` / `progress.stop()` +
   `set_header()` calls throughout the codebase.
 
-### Fixed (RV-23 … RV-36)
+### Fixed
 
 - Sortino ratio returns `None` instead of `+inf` when there is no downside deviation.
 - NYSE holiday skipping via price-index date filter (backtest engine no longer runs on market
