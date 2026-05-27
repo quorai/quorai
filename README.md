@@ -17,15 +17,51 @@ A multi-agent AI trading system where specialized LLM analyst agents deliberate 
 
 ## Quickstart
 
+**Prerequisites:** Python 3.11+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+
 ```bash
-uv sync
-cp .env.example .env   # add OPENROUTER_API_KEY and FINNHUB_API_KEY
-uv run backtester --tickers AAPL,MSFT --model deepseek/deepseek-chat --model-provider OpenRouter
+# Install uv (skip if already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-The `backtester` console script is installed by `uv sync`. For all options see [Usage — Backtesting](#backtesting).
+**1. Clone and install**
 
-> **Model choice matters.** All agents produce structured JSON output and the portfolio manager calls tools via LangChain. Use a model with strong instruction-following and structured-output capabilities — Claude (Anthropic), GPT-4o (OpenAI), or Gemini 2.5 Flash/Pro (Google) are reliable choices. Weaker models may produce malformed JSON that causes agent failures.
+```bash
+git clone https://github.com/quorai/quorai-app.git
+cd quorai-app
+uv sync
+```
+
+**2. Set API keys — you need exactly two**
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in:
+
+| Variable | Where to get it | Cost |
+|---|---|---|
+| `FINNHUB_API_KEY` | [finnhub.io/dashboard](https://finnhub.io/dashboard) | Free tier |
+| One LLM key (pick any) | [OpenRouter](https://openrouter.ai/) `OPENROUTER_API_KEY` · [Groq](https://console.groq.com/) `GROQ_API_KEY` · [DeepSeek](https://platform.deepseek.com/) `DEEPSEEK_API_KEY` · [Anthropic](https://console.anthropic.com/) `ANTHROPIC_API_KEY` | Varies |
+
+All other keys in `.env.example` are optional.
+
+**3. Run your first backtest**
+
+```bash
+uv run backtester \
+    --tickers AAPL,MSFT \
+    --model deepseek/deepseek-chat \
+    --model-provider OpenRouter \
+    --show-reasoning
+```
+
+Expect **~1–3 min per simulated trading day**. The output includes per-analyst signals, debate summaries, portfolio decisions, and performance metrics (Sharpe, alpha vs SPY).
+
+For all flags see [Usage — Backtesting](#backtesting). For the MCP server (run analysts from Claude Code/Desktop/Cursor) see [MCP server](#mcp-server).
+
+> **Model choice matters.** All agents produce structured JSON output and the portfolio manager calls tools via LangChain. Use a model with strong instruction-following: Claude (Anthropic), GPT-4o (OpenAI), Gemini 2.5 Flash/Pro (Google), or DeepSeek Chat. Weaker models may produce malformed JSON that causes agent failures.
 
 ## Contents
 
