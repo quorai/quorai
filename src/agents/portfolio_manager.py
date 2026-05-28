@@ -9,6 +9,12 @@ from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.llm import call_llm
 from src.utils.progress import progress
 
+# Minimum absolute panel tilt to block trading against the consensus directionally.
+# tilt = (bull_conf - bear_conf) / (bull_conf + bear_conf), range [-1, 1].
+# 0.34 ≈ roughly 2:1 directional imbalance (e.g. 8 bearish vs 4 bullish at equal weight).
+# Applies independently of regime classification.
+_PANEL_BLOCK_TILT: float = 0.34
+
 
 class PortfolioDecision(BaseModel):
     action: Literal["hold", "buy", "sell", "short", "cover"]
@@ -73,6 +79,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
     progress.update_status(agent_id, None, "Generating trading decisions")
 
     regime = state.get("metadata", {}).get("regime")
+    panel_stats = state["data"].get("panel_stats") or {}
     result = generate_trading_decision(
         tickers=tickers,
         signals_by_ticker=signals_by_ticker,
@@ -83,6 +90,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
         agent_id=agent_id,
         state=state,
         regime=regime,
+        panel_stats=panel_stats,
     )
     message = HumanMessage(
         content=json.dumps({ticker: decision.model_dump() for ticker, decision in result.decisions.items()}),
@@ -108,6 +116,7 @@ def compute_allowed_actions(
     regime: str | None = None,
     group_signals: dict[str, dict] | None = None,
     max_short_shares: dict[str, float] | None = None,
+    panel_stats: dict[str, dict] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compute allowed actions and max quantities for each ticker deterministically."""
     allowed = {}
@@ -189,6 +198,17 @@ def compute_allowed_actions(
                 pruned.pop("buy", None)
                 pruned.pop("short", None)
 
+        # Panel-tilt guard — blocks new longs/shorts that fight a clearly net-directional
+        # analyst panel.  Operates independently of regime classification so it fires even
+        # when regime detection is disabled.  Reducing positions (sell/cover) is always
+        # allowed regardless of tilt.
+        if panel_stats is not None:
+            tilt = float((panel_stats.get(ticker) or {}).get("tilt", 0.0))
+            if tilt <= -_PANEL_BLOCK_TILT:
+                pruned.pop("buy", None)
+            elif tilt >= _PANEL_BLOCK_TILT:
+                pruned.pop("short", None)
+
         allowed[ticker] = pruned
 
     return allowed
@@ -221,11 +241,15 @@ def generate_trading_decision(
     state: AgentState,
     regime: str | None = None,
     max_short_shares: dict[str, float] | None = None,
+    panel_stats: dict[str, dict] | None = None,
 ) -> PortfolioManagerOutput:
     """Get decisions from the LLM with deterministic constraints and a minimal prompt."""
 
     group_signals = state["data"].get("group_signals", {})
-    # Deterministic constraints (regime gate applied here)
+    # Resolve panel_stats: explicit arg takes precedence; fall back to state for direct callers.
+    if panel_stats is None:
+        panel_stats = state["data"].get("panel_stats") or {}
+    # Deterministic constraints (regime gate + panel-tilt guard applied here)
     allowed_actions_full = compute_allowed_actions(
         tickers,
         current_prices,
@@ -234,6 +258,7 @@ def generate_trading_decision(
         regime=regime,
         group_signals=group_signals,
         max_short_shares=max_short_shares,
+        panel_stats=panel_stats,
     )
 
     # Pre-fill pure holds to avoid sending them to the LLM at all
@@ -261,6 +286,31 @@ def generate_trading_decision(
         pos = positions.get(t, {}) or {}
         current_positions[t] = {"long": int(pos.get("long", 0) or 0), "short": int(pos.get("short", 0) or 0)}
 
+    # Build per-ticker position context: cost basis, unrealized P&L, and recent trade history.
+    # This anchors the LLM to its own prior decisions so it doesn't flip on unchanged signals.
+    recent_trades_data = state["data"].get("recent_trades") or {}
+    pm_context: dict[str, dict] = {}
+    for t in tickers_for_llm:
+        pos = positions.get(t, {}) or {}
+        price = float(current_prices.get(t, 0.0))
+        long_shares = float(pos.get("long", 0) or 0)
+        short_shares = float(pos.get("short", 0) or 0)
+        long_cb = float(pos.get("long_cost_basis", 0) or 0)
+        short_cb = float(pos.get("short_cost_basis", 0) or 0)
+        entry: dict = {}
+        if long_shares > 0 and long_cb > 0 and price > 0:
+            entry["long_shares"] = round(long_shares, 4)
+            entry["long_cost_basis"] = round(long_cb, 2)
+            entry["unrealized_pnl_pct"] = round((price - long_cb) / long_cb * 100, 2)
+        if short_shares > 0 and short_cb > 0 and price > 0:
+            entry["short_shares"] = round(short_shares, 4)
+            entry["short_cost_basis"] = round(short_cb, 2)
+            entry["unrealized_pnl_pct"] = round((short_cb - price) / short_cb * 100, 2)
+        rt = (recent_trades_data.get(t) or [])[-5:]
+        if rt:
+            entry["recent_trades"] = rt
+        pm_context[t] = entry
+
     # Include group debate summaries for contested tickers if available
     raw_debates = state["data"].get("debate_summaries", {})
     relevant_debates = {}
@@ -276,6 +326,20 @@ def generate_trading_decision(
         }
     debate_section = "\nGroup debate (contested tickers):\n" + json.dumps(relevant_debates, separators=(",", ":"), ensure_ascii=False) + "\n" if relevant_debates else ""
 
+    # Compact panel summary for each ticker: bull/bear/neutral counts and confidence-weighted tilt.
+    # tilt ∈ [-1, 1]: negative = net-bearish panel, positive = net-bullish panel.
+    compact_panel: dict[str, dict] = {}
+    for t in tickers_for_llm:
+        stats = (panel_stats or {}).get(t)
+        if stats:
+            compact_panel[t] = {
+                "bull": stats["bullish"],
+                "bear": stats["bearish"],
+                "neut": stats["neutral"],
+                "tilt": stats["tilt"],
+            }
+    panel_section = "\nPanel:\n" + json.dumps(compact_panel, separators=(",", ":"), ensure_ascii=False) + "\n" if compact_panel else ""
+
     regime_instruction = ""
     if regime == "bull_trend":
         regime_instruction = "\nMarket regime: BULL_TREND. Avoid new shorts — the allowed actions already block them when momentum/growth groups are bullish. Lean long; hold existing shorts only if quant and growth are both decisively bearish."
@@ -288,24 +352,37 @@ def generate_trading_decision(
         [
             (
                 "system",
-                "You are a portfolio manager.\n"
-                "Inputs per ticker: strategy-group signals (each group aggregates multiple analysts), "
-                "optional group debate context, current position (long/short shares), "
-                "and allowed actions with max qty (already validated).\n"
-                "Pick one allowed action per ticker and a quantity ≤ the max (fractional quantities allowed, e.g. 1.5). "
-                "Reference the actual current position in your reasoning — do not describe positions that don't exist. "
-                "When groups disagree, explain which group perspective is driving your decision. "
-                "Keep reasoning very concise (max 100 chars). No cash or margin math. Return JSON only."
+                "You are a portfolio manager. For each ticker pick exactly one allowed action and a quantity ≤ the listed max (fractional allowed).\n"
+                "\n"
+                "Inputs per ticker:\n"
+                "- strategy-group signals (each group aggregates multiple analysts) and optional group debate context\n"
+                "- Positions: current long/short shares (integer view)\n"
+                "- Position context: cost basis, unrealized P&L %, and the last up-to-5 executed trades for this ticker\n"
+                "- Allowed actions with max qty (already validated for cash/margin/regime)\n"
+                "\n"
+                "Decision rules — apply in order:\n"
+                "1) Every round-trip costs ~10-20 bps in slippage. Do not trade unless expected edge clearly exceeds that cost.\n"
+                "2) Anti-flip: if recent_trades shows you opened a position in the last 1-3 cycles, reversing it (sell after a recent buy; cover after a recent short) is almost never correct. Only flip if a specific group's signal changed materially since that trade — name which group in your reasoning.\n"
+                '3) When debate consensus_strength == "structural_split" and an existing position aligns with one of the camps, prefer hold over flipping. A split debate is not new information.\n'
+                "4) Do not chase: closing a losing position only to re-open it at a similar price is forbidden. If you held through a drawdown, keep holding unless a group signal materially changed.\n"
+                "5) Reference the actual current position and unrealized_pnl_pct in your reasoning. Do not invent positions that don't exist.\n"
+                "6) Panel tilt: the Panel block shows bull/bear/neutral counts and a confidence-weighted tilt. "
+                "Do not open a new long when the panel is net-bearish (tilt < −0.3), or a new short when net-bullish (tilt > +0.3), "
+                "unless a specific high-confidence group clearly justifies the exception — name that group.\n"
+                "\n"
+                "Reasoning: max 120 chars, must cite either (a) the group whose signal drives the action or (b) the rule above that justifies holding. Return JSON only."
                 "{regime_instruction}",
             ),
-            ("human", 'Signals:\n{signals}\n{debate_section}Positions:\n{positions}\nAllowed:\n{allowed}\n\nFormat:\n{{\n  "decisions": {{\n    "TICKER": {{"action":"...","quantity":float,"confidence":int,"reasoning":"..."}}\n  }}\n}}'),
+            ("human", 'Signals:\n{signals}\n{debate_section}{panel_section}Positions:\n{positions}\nPosition context:\n{pm_context}\nAllowed:\n{allowed}\n\nFormat:\n{{\n  "decisions": {{\n    "TICKER": {{"action":"...","quantity":float,"confidence":int,"reasoning":"..."}}\n  }}\n}}'),
         ]
     )
 
     prompt_data = {
         "signals": json.dumps(compact_signals, separators=(",", ":"), ensure_ascii=False),
         "debate_section": debate_section,
+        "panel_section": panel_section,
         "positions": json.dumps(current_positions, separators=(",", ":"), ensure_ascii=False),
+        "pm_context": json.dumps(pm_context, separators=(",", ":"), ensure_ascii=False),
         "allowed": json.dumps(compact_allowed, separators=(",", ":"), ensure_ascii=False),
         "regime_instruction": regime_instruction,
     }

@@ -11,9 +11,19 @@ from .types import PerformanceMetrics, PortfolioValuePoint
 class PerformanceMetricsCalculator:
     """Concrete metrics calculator like sharpe ratio, sortino ratio, max drawdown, etc."""
 
-    def __init__(self, *, annual_trading_days: int = 252, annual_rf_rate: float = 0.0434) -> None:
+    def __init__(
+        self,
+        *,
+        annual_trading_days: int = 252,
+        annual_rf_rate: float = 0.0434,
+        min_returns_for_ratios: int = 20,
+    ) -> None:
         self.annual_trading_days = annual_trading_days
         self.annual_rf_rate = annual_rf_rate
+        # Minimum number of daily returns required to emit Sharpe/Sortino/IR.
+        # Below this threshold √252 annualisation amplifies tiny sample variance
+        # into statistically meaningless extreme values.
+        self.min_returns_for_ratios = min_returns_for_ratios
 
     def update_metrics(self, metrics: PerformanceMetrics, values: Sequence[PortfolioValuePoint]) -> None:
         """Deprecated: mutate provided dict. Kept for backward compatibility."""
@@ -39,23 +49,31 @@ class PerformanceMetricsCalculator:
         if len(clean_returns) < 2:
             return {"sharpe_ratio": None, "sortino_ratio": None, "max_drawdown": None}
 
-        daily_rf = self.annual_rf_rate / self.annual_trading_days
-        excess = clean_returns - daily_rf
-        mean_excess = excess.mean()
-        std_excess = excess.std()
+        # Suppress risk-adjusted ratios on short windows — √252 annualisation
+        # amplifies a tiny, noisy mean/std ratio into statistically meaningless values.
+        enough_samples = len(clean_returns) >= self.min_returns_for_ratios
 
-        if std_excess > 1e-12:
-            sharpe = float(np.sqrt(self.annual_trading_days) * (mean_excess / std_excess))
-        else:
-            sharpe = 0.0
+        if enough_samples:
+            daily_rf = self.annual_rf_rate / self.annual_trading_days
+            excess = clean_returns - daily_rf
+            mean_excess = excess.mean()
+            std_excess = excess.std()
 
-        # Target downside deviation: sqrt(mean(min(excess, 0)^2)) over all periods
-        downside_diff = np.minimum(excess, 0)
-        downside_dev = float(np.sqrt(np.mean(downside_diff**2)))
-        if downside_dev > 1e-12:
-            sortino: float | None = float(np.sqrt(self.annual_trading_days) * (mean_excess / downside_dev))
+            if std_excess > 1e-12:
+                sharpe: float | None = float(np.sqrt(self.annual_trading_days) * (mean_excess / std_excess))
+            else:
+                sharpe = 0.0
+
+            # Target downside deviation: sqrt(mean(min(excess, 0)^2)) over all periods
+            downside_diff = np.minimum(excess, 0)
+            downside_dev = float(np.sqrt(np.mean(downside_diff**2)))
+            if downside_dev > 1e-12:
+                sortino: float | None = float(np.sqrt(self.annual_trading_days) * (mean_excess / downside_dev))
+            else:
+                sortino = None if mean_excess > 0 else 0.0
         else:
-            sortino = None if mean_excess > 0 else 0.0
+            sharpe = None
+            sortino = None
 
         rolling_max = df["Portfolio Value"].cummax()
         drawdown = (df["Portfolio Value"] - rolling_max) / rolling_max
@@ -116,10 +134,15 @@ class PerformanceMetricsCalculator:
         benchmark_total = float((1 + aligned["benchmark"]).prod() - 1)
         alpha_pct = (strategy_total - benchmark_total) * 100.0
 
-        active = aligned["strategy"] - aligned["benchmark"]
-        active_std = float(active.std())
-        if active_std > 1e-12:
-            ir: float | None = float(np.sqrt(self.annual_trading_days) * active.mean() / active_std)
+        # IR requires a minimum sample for √252 annualisation to be meaningful.
+        # alpha_pct is a raw total-return spread and is reported regardless of window length.
+        if len(aligned) >= self.min_returns_for_ratios:
+            active = aligned["strategy"] - aligned["benchmark"]
+            active_std = float(active.std())
+            if active_std > 1e-12:
+                ir: float | None = float(np.sqrt(self.annual_trading_days) * active.mean() / active_std)
+            else:
+                ir = None
         else:
             ir = None
 

@@ -33,6 +33,7 @@ class AgentController:
         request: RunRequest | None = None,
         risk_profile: RiskProfile | None = None,
         regime: str | None = None,
+        recent_trades: dict[str, list[dict]] | None = None,
     ) -> AgentOutput:
         # Ensure we pass a plain snapshot dict to preserve legacy expectations
         if isinstance(portfolio, Portfolio):
@@ -55,6 +56,7 @@ class AgentController:
             request=request,
             risk_profile=risk_profile,
             regime=regime,
+            recent_trades=recent_trades,
         )
 
         # Normalize outputs to avoid None/missing keys

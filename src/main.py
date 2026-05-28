@@ -59,6 +59,7 @@ def run_quorai(
     request: RunRequest | None = None,
     risk_profile: RiskProfile | None = None,
     regime: str | None = None,
+    recent_trades: dict[str, list[dict]] | None = None,
 ):
     if selected_analysts is None:
         selected_analysts = []
@@ -84,6 +85,7 @@ def run_quorai(
                     "start_date": start_date,
                     "end_date": end_date,
                     "analyst_signals": {},
+                    "recent_trades": recent_trades or {},
                 },
                 "metadata": {
                     "show_reasoning": show_reasoning,

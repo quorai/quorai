@@ -114,6 +114,7 @@ class BacktestEngine:
         self._prefetched_prices: dict[str, pd.DataFrame] = {}
         self._signal_log_path: str | None = None
         self._token_summary_data: dict = {}
+        self._recent_trades: dict[str, list[dict]] = {t: [] for t in tickers}
 
     def _prefetch_data(self) -> None:
         """Bulk-fetch all ticker data for the backtest window and install the in-memory store.
@@ -308,6 +309,7 @@ class BacktestEngine:
                         portfolio=self._portfolio,
                         signal_prices=signal_prices,
                         spy_df=price_feed.get_spy_df(lookback_start, current_date_str),
+                        recent_trades=self._recent_trades,
                     )
                     decisions = agent_output["decisions"]
 
@@ -336,6 +338,19 @@ class BacktestEngine:
                         executed_trades=executed_trades,
                         portfolio_after=self._portfolio,
                     )
+
+                    for t, executed_qty in executed_trades.items():
+                        if executed_qty and executed_qty > 0:
+                            d = decisions.get(t, {})
+                            self._recent_trades[t].append(
+                                {
+                                    "date": current_date_str,
+                                    "action": d.get("action", "hold"),
+                                    "qty": round(float(executed_qty), 4),
+                                    "price": round(float(fill_prices.get(t, 0.0)), 2),
+                                }
+                            )
+                            self._recent_trades[t] = self._recent_trades[t][-5:]
 
                     point: PortfolioValuePoint = {
                         "Date": current_date,

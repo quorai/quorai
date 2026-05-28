@@ -190,12 +190,20 @@ def _main_run(argv: list[str]) -> int:
         metrics = engine.run_backtest()
         values = engine.get_portfolio_values()
 
+        # Number of daily return observations = NAV points − 1 (pct_change drops first).
+        _MIN_RETURNS_FOR_RATIOS = 20
+        n_returns = max(0, len(values) - 1) if values else 0
+        metrics_significant = n_returns >= _MIN_RETURNS_FOR_RATIOS
+
         if values:
             print(f"\n{Fore.WHITE}{Style.BRIGHT}ENGINE RUN COMPLETE{Style.RESET_ALL}")
             last_value = values[-1]["Portfolio Value"]
             start_value = values[0]["Portfolio Value"]
             total_return = (last_value / start_value - 1.0) * 100.0 if start_value else 0.0
             print(f"Total Return: {Fore.GREEN if total_return >= 0 else Fore.RED}{total_return:.2f}%{Style.RESET_ALL}")
+
+        if not metrics_significant and n_returns > 0:
+            print(f"{Fore.YELLOW}⚠  Sharpe/Sortino/IR suppressed: only {n_returns} daily return{'s' if n_returns != 1 else ''} (< {_MIN_RETURNS_FOR_RATIOS}); not statistically meaningful on this window.{Style.RESET_ALL}")
 
         if metrics.get("sharpe_ratio") is not None:
             print(f"Sharpe: {metrics['sharpe_ratio']:.2f}")
@@ -231,7 +239,7 @@ def _main_run(argv: list[str]) -> int:
             basket_rel["information_ratio"],
         )
 
-        result_record = {"metrics": dict(metrics), "baselines": baselines}
+        result_record = {"metrics": dict(metrics), "baselines": baselines, "metrics_significant": metrics_significant}
         if values:
             result_record["total_return_pct"] = total_return
             result_record["initial_portfolio_value"] = start_value

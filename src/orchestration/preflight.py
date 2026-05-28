@@ -208,6 +208,7 @@ class PipelineContext:
         portfolio: "Portfolio | PortfolioSnapshot",
         signal_prices: dict[str, float],
         spy_df: pd.DataFrame | None = None,
+        recent_trades: dict[str, list[dict]] | None = None,
     ) -> AgentOutput:
         """Run one agent cycle and log signals; return the full AgentOutput.
 
@@ -259,6 +260,7 @@ class PipelineContext:
             request=self._request,
             risk_profile=self._risk_profile,
             regime=active_regime,
+            recent_trades=recent_trades,
         )
 
         if self._signal_logger is not None:
