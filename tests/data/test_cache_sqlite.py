@@ -78,6 +78,50 @@ class TestUpsertDeduplication:
         assert cache.get_market_cap("AAPL_2024") == pytest.approx(2_000_000.0)
 
 
+class TestOnDiskConcurrentWrites:
+    """Guard against the connection-leak / FD-exhaustion bug (GH: unable to open database file).
+
+    The fix: _connect() returns the same persistent connection object on every call instead of
+    opening a new OS file handle each time.  These tests verify both the structural guarantee
+    (connection reuse) and the symptom it prevents (OperationalError under concurrent write load).
+    """
+
+    def test_connection_is_reused(self, tmp_path):
+        c = Cache(db_path=tmp_path / "reuse.db")
+        # _connect() must return the exact same object every time — one FD, not N.
+        assert c._connect() is c._connect()
+
+    def test_concurrent_writes_do_not_raise(self, tmp_path):
+        """Simulate analyst × ticker nested parallelism against a shared on-disk Cache."""
+        c = Cache(db_path=tmp_path / "concurrent.db")
+        errors: list[Exception] = []
+
+        def write_batch(analyst_idx: int) -> None:
+            for ticker_idx in range(4):
+                try:
+                    key = f"T{analyst_idx}_{ticker_idx}_2024-01-01"
+                    c.set_market_cap(key, float(analyst_idx * 1000 + ticker_idx))
+                    c.set_prices(
+                        f"prices_{key}",
+                        [{"time": "2024-01-01T00:00:00", "close": 100.0 + ticker_idx}],
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+
+        # 8 analyst threads × 4 ticker ops each — mirrors the default parallelism ceiling
+        threads = [threading.Thread(target=write_batch, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"Concurrent writes raised: {errors}"
+
+        # Verify data landed correctly for a spot-check key
+        assert c.get_market_cap("T0_0_2024-01-01") == pytest.approx(0.0)
+        assert c.get_market_cap("T7_3_2024-01-01") == pytest.approx(7003.0)
+
+
 class TestConcurrentReads:
     def test_concurrent_reads_are_safe(self, cache):
         cache.set_prices("AAPL_concurrent", [{"time": "2024-01-01", "close": 150.0}])

@@ -142,9 +142,12 @@ class TestSearchLineItems:
             }
         )
 
+        mock_sec = MagicMock()
+        mock_sec.get_statements.return_value = None  # not seeded → fall through to yfinance
         with (
             patch("src.tools.api._cache.get_line_items", return_value=None),
             patch("src.tools.api._cache.set_line_items"),
+            patch("src.data.sec_store.get_sec_store", return_value=mock_sec),
             patch("src.tools._yfinance_fundamentals.yf") as mock_yf,
         ):
             mock_yf.Ticker.return_value = yf_ticker
@@ -167,9 +170,12 @@ class TestSearchLineItems:
             },
         )
 
+        mock_sec = MagicMock()
+        mock_sec.get_statements.return_value = None
         with (
             patch("src.tools.api._cache.get_line_items", return_value=None),
             patch("src.tools.api._cache.set_line_items"),
+            patch("src.data.sec_store.get_sec_store", return_value=mock_sec),
             patch("src.tools._yfinance_fundamentals.yf") as mock_yf,
         ):
             mock_yf.Ticker.return_value = yf_ticker
@@ -188,9 +194,12 @@ class TestSearchLineItems:
             },
         )
 
+        mock_sec = MagicMock()
+        mock_sec.get_statements.return_value = None
         with (
             patch("src.tools.api._cache.get_line_items", return_value=None),
             patch("src.tools.api._cache.set_line_items"),
+            patch("src.data.sec_store.get_sec_store", return_value=mock_sec),
             patch("src.tools._yfinance_fundamentals.yf") as mock_yf,
         ):
             mock_yf.Ticker.return_value = yf_ticker

@@ -47,10 +47,13 @@ class Cache:
     """In-memory-plus-SQLite cache for API responses."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self._db_path = str(db_path) if db_path is not None else str(_DB_FILE)
+        if db_path is not None:
+            self._db_path = ":memory:" if str(db_path) == ":memory:" else str(Path(db_path).resolve())
+        else:
+            self._db_path = str(_DB_FILE.resolve())
         self._lock = threading.Lock()
-        # Persistent connection for :memory: (each new connect() creates a fresh DB)
-        self._mem_conn: sqlite3.Connection | None = None
+        # Single persistent connection (reused for both :memory: and on-disk)
+        self._conn: sqlite3.Connection | None = None
         # In-process write-through caches (avoid hitting disk for every read)
         self._prices: dict[str, list[dict[str, Any]]] = {}
         self._financial_metrics: dict[str, list[dict[str, Any]]] = {}
@@ -65,17 +68,12 @@ class Cache:
             logger.warning("Legacy pickle cache %s is no longer used; delete it to suppress this warning", _LEGACY_PKL)
 
     def _connect(self) -> sqlite3.Connection:
-        if self._db_path == ":memory:":
-            if self._mem_conn is None:
-                self._mem_conn = sqlite3.connect(":memory:", check_same_thread=False)
-            return self._mem_conn
-        _CACHE_DIR.mkdir(exist_ok=True)
-        needs_init = not Path(self._db_path).exists()
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        if needs_init:
-            conn.executescript(_CREATE_STMTS)
-            conn.commit()
-        return conn
+        if self._conn is None:
+            if self._db_path != ":memory:":
+                Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        return self._conn
 
     def _init_db(self) -> None:
         conn = self._connect()
@@ -114,11 +112,19 @@ class Cache:
 
     def _upsert(self, table: str, key: str, payload: list[dict]) -> None:
         conn = self._connect()
-        conn.execute(
-            f"INSERT OR REPLACE INTO {table} (key, payload) VALUES (?, ?)",  # noqa: S608
-            (key, json.dumps(payload)),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                f"INSERT OR REPLACE INTO {table} (key, payload) VALUES (?, ?)",  # noqa: S608
+                (key, json.dumps(payload)),
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            self._conn = None
+            raise
 
     # ── prices ──────────────────────────────────────────────────────────────
 
@@ -184,8 +190,16 @@ class Cache:
         with self._lock:
             self._market_cap[key] = value
             conn = self._connect()
-            conn.execute("INSERT OR REPLACE INTO market_cap (key, value) VALUES (?, ?)", (key, value))
-            conn.commit()
+            try:
+                conn.execute("INSERT OR REPLACE INTO market_cap (key, value) VALUES (?, ?)", (key, value))
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                self._conn = None
+                raise
 
     # ── ticker_cik ───────────────────────────────────────────────────────────
 
@@ -197,8 +211,16 @@ class Cache:
         with self._lock:
             self._ticker_to_cik.update(mapping)
             conn = self._connect()
-            conn.execute("INSERT OR REPLACE INTO ticker_cik (key, payload) VALUES (?, ?)", ("cik_map", json.dumps(self._ticker_to_cik)))
-            conn.commit()
+            try:
+                conn.execute("INSERT OR REPLACE INTO ticker_cik (key, payload) VALUES (?, ?)", ("cik_map", json.dumps(self._ticker_to_cik)))
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                self._conn = None
+                raise
 
 
 # Global singleton

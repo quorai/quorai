@@ -15,6 +15,19 @@ from src.utils.progress import progress
 # Applies independently of regime classification.
 _PANEL_BLOCK_TILT: float = 0.34
 
+# Minimum fraction of analysts that must cast a directional vote (bullish or bearish)
+# before the panel-tilt guard is allowed to fire.  When the majority of analysts are
+# neutral (e.g. because fundamentals data is missing), the computed tilt is based on
+# a small and unrepresentative sample — blocking longs on that tilt would be wrong.
+# At 0.40, at least 10/25 analysts must have a directional view for the gate to activate.
+_PANEL_BLOCK_MIN_PARTICIPATION: float = 0.40
+
+# Minimum number of cycles a position must be held before a sell/cover is allowed
+# from a deterministic perspective.  The prompt-level anti-flip rules are ignored by
+# small models; this structural guard makes the buy-then-immediately-sell pattern
+# impossible.  Set to 2 so a position opened on day N cannot be closed until day N+2.
+_MIN_HOLD_CYCLES: int = 2
+
 
 class PortfolioDecision(BaseModel):
     action: Literal["hold", "buy", "sell", "short", "cover"]
@@ -117,6 +130,7 @@ def compute_allowed_actions(
     group_signals: dict[str, dict] | None = None,
     max_short_shares: dict[str, float] | None = None,
     panel_stats: dict[str, dict] | None = None,
+    recent_trades: dict[str, list] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compute allowed actions and max quantities for each ticker deterministically."""
     allowed = {}
@@ -202,12 +216,40 @@ def compute_allowed_actions(
         # analyst panel.  Operates independently of regime classification so it fires even
         # when regime detection is disabled.  Reducing positions (sell/cover) is always
         # allowed regardless of tilt.
+        #
+        # Participation floor: only fire when enough analysts have a directional view.
+        # A majority-neutral panel (e.g. because fundamentals data is missing) produces
+        # a tilt computed from a small sample; blocking on that would be a false signal.
         if panel_stats is not None:
-            tilt = float((panel_stats.get(ticker) or {}).get("tilt", 0.0))
-            if tilt <= -_PANEL_BLOCK_TILT:
-                pruned.pop("buy", None)
-            elif tilt >= _PANEL_BLOCK_TILT:
-                pruned.pop("short", None)
+            stats = panel_stats.get(ticker) or {}
+            tilt = float(stats.get("tilt", 0.0))
+            n_bull = int(stats.get("bullish", 0))
+            n_bear = int(stats.get("bearish", 0))
+            n_neut = int(stats.get("neutral", 0))
+            n_total = n_bull + n_bear + n_neut
+            directional_fraction = (n_bull + n_bear) / n_total if n_total > 0 else 0.0
+            gate_armed = directional_fraction >= _PANEL_BLOCK_MIN_PARTICIPATION
+            if gate_armed:
+                if tilt <= -_PANEL_BLOCK_TILT:
+                    pruned.pop("buy", None)
+                elif tilt >= _PANEL_BLOCK_TILT:
+                    pruned.pop("short", None)
+
+        # Min-hold gate — prevents same-day or next-cycle position reversals that
+        # rack up slippage without capturing any edge.  If the most recent trade on
+        # a ticker was a 'buy' within the last _MIN_HOLD_CYCLES cycles, block 'sell'.
+        # Symmetrically, block 'cover' after a recent 'short'.
+        # 'cover' and 'sell' remain available once the hold window has elapsed.
+        if recent_trades is not None:
+            ticker_trades = recent_trades.get(ticker) or []
+            # trades are stored newest-last; look at the last _MIN_HOLD_CYCLES
+            recent_n = ticker_trades[-_MIN_HOLD_CYCLES:] if ticker_trades else []
+            opened_long_recently = any(t.get("action") == "buy" for t in recent_n)
+            opened_short_recently = any(t.get("action") == "short" for t in recent_n)
+            if opened_long_recently:
+                pruned.pop("sell", None)
+            if opened_short_recently:
+                pruned.pop("cover", None)
 
         allowed[ticker] = pruned
 
@@ -249,7 +291,8 @@ def generate_trading_decision(
     # Resolve panel_stats: explicit arg takes precedence; fall back to state for direct callers.
     if panel_stats is None:
         panel_stats = state["data"].get("panel_stats") or {}
-    # Deterministic constraints (regime gate + panel-tilt guard applied here)
+    # Deterministic constraints (regime gate + panel-tilt guard + min-hold gate applied here)
+    recent_trades_data = state["data"].get("recent_trades") or {}
     allowed_actions_full = compute_allowed_actions(
         tickers,
         current_prices,
@@ -259,6 +302,7 @@ def generate_trading_decision(
         group_signals=group_signals,
         max_short_shares=max_short_shares,
         panel_stats=panel_stats,
+        recent_trades=recent_trades_data,
     )
 
     # Pre-fill pure holds to avoid sending them to the LLM at all
@@ -367,8 +411,9 @@ def generate_trading_decision(
                 "4) Do not chase: closing a losing position only to re-open it at a similar price is forbidden. If you held through a drawdown, keep holding unless a group signal materially changed.\n"
                 "5) Reference the actual current position and unrealized_pnl_pct in your reasoning. Do not invent positions that don't exist.\n"
                 "6) Panel tilt: the Panel block shows bull/bear/neutral counts and a confidence-weighted tilt. "
-                "Do not open a new long when the panel is net-bearish (tilt < −0.3), or a new short when net-bullish (tilt > +0.3), "
-                "unless a specific high-confidence group clearly justifies the exception — name that group.\n"
+                "Do not open a new long when the panel is net-bearish (tilt < −0.3), or a new short when net-bullish (tilt > +0.3). "
+                "Exception: if neutral analysts outnumber directional ones (low participation), the tilt is unreliable — "
+                "you may disregard it but must name which high-confidence group justifies the action.\n"
                 "\n"
                 "Reasoning: max 120 chars, must cite either (a) the group whose signal drives the action or (b) the rule above that justifies holding. Return JSON only."
                 "{regime_instruction}",

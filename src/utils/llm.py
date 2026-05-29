@@ -337,8 +337,10 @@ def call_llm(
 
             # Empty/invalid JSON response (e.g. OpenRouter returns 200 with empty body) — switch to
             # manual extraction so the hint message is appended on the next attempt.
-            elif not use_manual_extraction and ("expecting value" in exc_str.lower() or "jsondecode" in type(exc).__name__.lower()):
-                logger.warning("Empty or unparseable JSON from LLM for %s (attempt %d); switching to manual extraction", agent_name or model_name, attempt + 1)
+            # Also catches pydantic ValidationError when structured output returns an empty/incomplete
+            # object (input_value={}) — OpenRouter sometimes returns {} instead of the expected schema.
+            elif not use_manual_extraction and ("expecting value" in exc_str.lower() or "jsondecode" in type(exc).__name__.lower() or "validationerror" in type(exc).__name__.lower()):
+                logger.warning("Empty/unparseable JSON or invalid structured output from LLM for %s (attempt %d); switching to manual extraction", agent_name or model_name, attempt + 1)
                 use_manual_extraction = True
 
             # Exponential back-off for rate-limit errors; immediate retry otherwise.

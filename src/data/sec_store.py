@@ -236,11 +236,15 @@ class SecStore:
     def _get_period(self, ticker: str, period: str, end_date: str, limit: int) -> list[StatementBundle]:
         """Fetch up to `limit` annual or quarterly StatementBundles, newest-first."""
         with self._connect() as conn:
-            # Get distinct period_ends where at least one fact was filed by end_date
+            # Get distinct period_ends where at least one *financial* fact was filed by
+            # end_date.  Exclude 'dei' section: DEI facts (e.g. shares_outstanding) use
+            # the cover-page date as period_end (a few weeks after the fiscal year end),
+            # which would create empty bundles that shadow the real financial period and
+            # poison TTM summation.  DEI data is still accessible via get_shares_outstanding().
             period_ends = [
                 row[0]
                 for row in conn.execute(
-                    "SELECT DISTINCT period_end FROM sec_facts WHERE ticker=? AND period=? AND filed<=? ORDER BY period_end DESC LIMIT ?",
+                    "SELECT DISTINCT period_end FROM sec_facts WHERE ticker=? AND period=? AND section != 'dei' AND filed<=? ORDER BY period_end DESC LIMIT ?",
                     (ticker, period, end_date, limit),
                 ).fetchall()
             ]
