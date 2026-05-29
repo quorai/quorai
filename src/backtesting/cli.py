@@ -18,6 +18,7 @@ from src.utils.tz import now_ny
 from src.utils.validation import validate_ticker
 
 from .comparison import RunConfig, run_comparison
+from .costs import CostModel
 from .engine import BacktestEngine
 from .metrics import PerformanceMetricsCalculator
 
@@ -63,6 +64,10 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility (default: 42)")
     parser.add_argument("--run-label", type=str, default="", dest="run_label", help="Tag for this run (embedded in run_id and manifest for later filtering)")
     parser.add_argument("--log-dir", type=str, default=None, dest="log_dir", help="Override artifact directory (default: logs/backtest)")
+    # Trading-cost model (all default to 0 = frictionless)
+    parser.add_argument("--slippage-bps", type=float, default=0.0, dest="slippage_bps", help="Per-side slippage in basis points (recommended: 5 for liquid US equities)")
+    parser.add_argument("--commission-bps", type=float, default=0.0, dest="commission_bps", help="Per-trade commission in bps of notional (recommended: 2)")
+    parser.add_argument("--borrow-bps-annual", type=float, default=0.0, dest="borrow_bps_annual", help="Annualised short-borrow cost in bps, accrued daily (recommended: 50)")
     add_risk_profile_arg(parser)
 
 
@@ -182,6 +187,11 @@ def _main_run(argv: list[str]) -> int:
         seed=args.seed,
         run_label=args.run_label,
         log_dir=args.log_dir,
+        cost_model=CostModel.from_args(
+            slippage_bps=args.slippage_bps,
+            commission_bps=args.commission_bps,
+            borrow_bps_annual=args.borrow_bps_annual,
+        ),
     )
 
     cli_args_record = {"argv": sys.argv[:], "parsed": vars(args)}
@@ -201,6 +211,13 @@ def _main_run(argv: list[str]) -> int:
             start_value = values[0]["Portfolio Value"]
             total_return = (last_value / start_value - 1.0) * 100.0 if start_value else 0.0
             print(f"Total Return: {Fore.GREEN if total_return >= 0 else Fore.RED}{total_return:.2f}%{Style.RESET_ALL}")
+            costs = engine.get_cost_summary()
+            if costs["total_costs"] > 0:
+                print(f"\n{Fore.WHITE}{Style.BRIGHT}TRADING COSTS{Style.RESET_ALL}")
+                print(f"  Slippage:   ${costs['total_slippage']:,.2f}")
+                print(f"  Commission: ${costs['total_commission']:,.2f}")
+                print(f"  Borrow:     ${costs['total_borrow']:,.2f}")
+                print(f"  Total:      ${costs['total_costs']:,.2f} ({costs['total_costs'] / start_value * 100:.2f}% of initial capital)")
 
         if not metrics_significant and n_returns > 0:
             print(f"{Fore.YELLOW}⚠  Sharpe/Sortino/IR suppressed: only {n_returns} daily return{'s' if n_returns != 1 else ''} (< {_MIN_RETURNS_FOR_RATIOS}); not statistically meaningful on this window.{Style.RESET_ALL}")
@@ -376,6 +393,87 @@ def _main_feedback(argv: list[str]) -> int:
     return 0
 
 
+def _main_attribution(argv: list[str]) -> int:
+    """Compute per-analyst and per-group directional-spread / hit-rate from a labeled signal log."""
+    parser = argparse.ArgumentParser(description="Attribute alpha to analysts and strategy groups")
+    parser.add_argument("--signal-log", required=True, dest="signal_log", help="Path to labeled JSONL signal log (run 'feedback' first to produce one)")
+    parser.add_argument("--horizon", type=int, default=5, help="Forward-return horizon in trading days to use (default: 5)")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Path for attribution JSON output (default: attribution_<signal-log-stem>.json next to the log)",
+    )
+    args = parser.parse_args(argv)
+
+    from pathlib import Path
+
+    from src.backtesting.attribution import compute_attribution
+
+    signal_path = Path(args.signal_log)
+    if not signal_path.exists():
+        print(f"Error: signal log not found: {args.signal_log}")
+        return 1
+
+    output_path = args.output or str(signal_path.parent / f"attribution_{signal_path.stem}.json")
+    report = compute_attribution(args.signal_log, horizon=args.horizon, output_path=output_path)
+
+    if not report:
+        print("No directional signals found — nothing to attribute.")
+        return 1
+
+    print(f"\n{Fore.WHITE}{Style.BRIGHT}ALPHA ATTRIBUTION (horizon={args.horizon}d){Style.RESET_ALL}")
+    header = f"{'Analyst':<28} {'Group':<22} {'Spread':>8} {'Hit%':>7} {'N':>5}"
+    print(header)
+    print("-" * len(header))
+    for entry in report:
+        spread = entry.get("directional_spread")
+        spread_str = f"{spread:.4f}" if spread is not None else "N/A"
+        hit_str = f"{entry['hit_rate'] * 100:.1f}%" if entry["hit_rate"] is not None else "N/A"
+        color = Fore.GREEN if (spread or 0) >= 0 else Fore.RED
+        print(f"{entry['agent_id']:<28} {entry.get('group', ''):<22} {color}{spread_str:>8}{Style.RESET_ALL} {hit_str:>7} {entry['sample_count']:>5}")
+
+    print(f"\nFull report written to {output_path}")
+    return 0
+
+
+def _main_ablation(argv: list[str]) -> int:
+    """Run baseline vs gate-disabled ablation comparison to quantify each PM gate's contribution."""
+    parser = argparse.ArgumentParser(description="Ablation study: disable each PM gate in turn vs baseline")
+    _add_common_args(parser)
+    args = parser.parse_args(argv)
+
+    import numpy as np
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
+    start_date, end_date = _resolve_dates(args)
+    tickers = [validate_ticker(t) for t in parse_tickers(args.tickers)]
+    model_name, model_provider = _resolve_model(args)
+    check_provider_api_key(model_provider)
+
+    from src.backtesting.comparison import run_ablation
+
+    common = dict(
+        tickers=tickers,
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=args.initial_capital,
+        model_name=model_name,
+        model_provider=model_provider,
+        selected_analysts=_resolve_analysts(args),
+        initial_margin_requirement=args.margin_requirement,
+        risk_profile=get_profile(args.risk_profile),
+        seed=args.seed,
+        slippage_bps=args.slippage_bps,
+        commission_bps=args.commission_bps,
+        borrow_bps_annual=args.borrow_bps_annual,
+    )
+    run_ablation(common)
+    return 0
+
+
 def main() -> int:
     init(autoreset=True)
     argv = sys.argv[1:]
@@ -383,4 +481,8 @@ def main() -> int:
         return _main_compare(argv[1:])
     if argv and argv[0] == "feedback":
         return _main_feedback(argv[1:])
+    if argv and argv[0] == "attribution":
+        return _main_attribution(argv[1:])
+    if argv and argv[0] == "ablation":
+        return _main_ablation(argv[1:])
     return _main_run(argv)

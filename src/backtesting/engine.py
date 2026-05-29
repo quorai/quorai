@@ -28,6 +28,7 @@ from src.tools.api import (
 from src.utils.progress import progress
 
 from .benchmarks import BenchmarkCalculator
+from .costs import CostModel
 from .metrics import PerformanceMetricsCalculator
 from .output import OutputBuilder
 from .portfolio import Portfolio
@@ -66,6 +67,7 @@ class BacktestEngine:
         run_label: str = "",
         seed: int | None = None,
         log_dir: str | None = None,
+        cost_model: CostModel | None = None,
     ) -> None:
         self._agent = agent
         self._tickers = tickers
@@ -85,12 +87,14 @@ class BacktestEngine:
         self._run_label = run_label
         self._seed = seed
         self._log_dir = log_dir
+        self._cost_model: CostModel = cost_model if cost_model is not None else CostModel.zero()
         self._fingerprint_cache: str | None = None
 
         self._portfolio = Portfolio(
             tickers=tickers,
             initial_cash=initial_capital,
             margin_requirement=initial_margin_requirement,
+            cost_model=self._cost_model,
         )
         self._executor = TradeExecutor()
         self._perf = PerformanceMetricsCalculator()
@@ -204,6 +208,9 @@ class BacktestEngine:
             "use_conviction_weights": self._use_conviction_weights,
             "risk_profile": self._risk_profile.name if self._risk_profile is not None else None,
             "seed": self._seed,
+            "slippage_bps": self._cost_model.slippage_bps,
+            "commission_bps": self._cost_model.commission_bps,
+            "borrow_bps_annual": self._cost_model.borrow_bps_annual,
         }
         raw = json.dumps(payload, sort_keys=True)
         self._fingerprint_cache = hashlib.sha256(raw.encode()).hexdigest()[:8]
@@ -318,6 +325,9 @@ class BacktestEngine:
                     # positions that were already held — it does not include phantom PnL
                     # from the spread between today's close and tomorrow's fill open.
                     current_prices = signal_prices
+                    # Accrue daily short-borrow cost on positions held as of today's close.
+                    # Must happen before trade execution so carry is charged on existing shorts.
+                    self._portfolio.accrue_borrow_cost(current_prices)
                     total_value = calculate_portfolio_value(self._portfolio, current_prices)
                     exposures = compute_exposures(self._portfolio, current_prices)
 
@@ -393,3 +403,7 @@ class BacktestEngine:
     def get_token_summary(self) -> dict:
         """Return aggregated token-usage stats from the completed backtest."""
         return self._token_summary_data
+
+    def get_cost_summary(self) -> dict[str, float]:
+        """Return cumulative slippage/commission/borrow totals from the completed backtest."""
+        return self._portfolio.get_cost_summary()

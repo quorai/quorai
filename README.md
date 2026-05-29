@@ -98,7 +98,9 @@ For all flags see [Usage — Backtesting](#backtesting). For the MCP server (run
 - **Conviction-weight feedback loop** — tracks each agent's rolling directional hit-rate; high-accuracy agents receive proportionally more weight in the debate aggregation
 - **Signal logging + forward-return labeling** — persists every per-agent-per-ticker signal to JSONL during a backtest run; a separate labeler attaches 1d/5d/20d forward returns so hit-rates can be computed
 - **Token-usage telemetry** — captures and accumulates LLM token counts per agent across the full backtest run; Anthropic prompt caching is applied automatically and cache-read/creation tokens are surfaced separately
-- **A/B comparison harness** — runs two backtest configs back-to-back and prints a side-by-side metrics table (full-vs-regime analysts, uniform-vs-conviction weights)
+- **A/B comparison + gate ablation harness** — runs two backtest configs back-to-back and prints a side-by-side metrics table; `ablation` subcommand disables each PM gate in turn and reports the return/Sharpe delta vs a gated baseline
+- **Realistic cost model** — optional slippage, commission, and short-borrow costs charged to the fill path (`--slippage-bps`, `--commission-bps`, `--borrow-bps-annual`); propagate automatically through NAV → Sharpe/alpha
+- **Alpha attribution** — `attribution` subcommand reads a labeled signal log and reports per-analyst hit-rate, directional spread (signal IC), and confidence-weighted score, ranked best-first, with group-level roll-ups
 - **Per-agent model routing** — override model and provider per analyst via `--agent-model AGENT=model/PROVIDER`; handled by `RunRequest` (`src/llm/request.py`)
 - **Parallel per-ticker execution** — set `QUORAI_PARALLEL_TICKERS=N` to run N tickers concurrently via a thread pool (`src/utils/concurrency.py`)
 - **SEC EDGAR fundamentals** — point-in-time XBRL data via a local SQLite store (`.cache/sec_fundamentals.db`); eliminates yfinance look-ahead bias on historical share counts and financial statements. Seed with `experiments/seed_sec_fundamentals.py`; falls through to yfinance for unseeded tickers.
@@ -355,6 +357,9 @@ Key flags:
 - `--seed` — RNG seed for reproducibility (default: 42)
 - `--log-dir` — override artifact directory (default: `logs/backtest`)
 - `--run-label` — tag embedded in `run_id` and manifest for later filtering
+- `--slippage-bps` — per-side fill price impact in basis points (default: 0; recommended: 5 for liquid US equities)
+- `--commission-bps` — per-trade commission on notional in bps (default: 0; recommended: 2)
+- `--borrow-bps-annual` — annualised short-borrow carry in bps, accrued daily (default: 0; recommended: 50)
 
 #### A/B comparison
 
@@ -385,6 +390,36 @@ Flags:
 - `--output-dir` — directory for labeled log and accuracy report (default: same directory as signal log)
 
 Writes `src/feedback/weights.json` and `accuracy_report.json`. Re-run backtesting with `--use-conviction-weights` to apply the computed weights.
+
+#### Attribution report
+
+After labeling a signal log (see `feedback` above), run attribution to rank analysts by signal quality:
+
+```bash
+uv run backtester attribution \
+    --signal-log logs/backtest/signals/labeled_signals-<run-id>.jsonl
+```
+
+Prints a ranked table of hit-rate, directional spread (mean bullish return − mean bearish return), and confidence-weighted score per analyst and strategy group. Writes `attribution_<log-stem>.json` next to the log file.
+
+Flags:
+- `--signal-log` — path to the *labeled* JSONL (produced by `feedback`; required)
+- `--horizon` — forward-return horizon to use for scoring (default: 5)
+- `--output` — override output JSON path
+
+#### Gate ablation
+
+Quantify each PM gate's contribution by running baseline vs gate-disabled variants:
+
+```bash
+uv run backtester ablation \
+    --tickers AAPL,MSFT \
+    --model deepseek/deepseek-chat \
+    --model-provider OpenRouter \
+    --slippage-bps 5 --commission-bps 2
+```
+
+Runs four sequential backtests (baseline + no-regime-gate + no-panel-gate + no-min-hold-gate) and prints a delta table showing return/Sharpe change vs the gated baseline. Accepts all standard backtest flags; cost flags are forwarded so churn deltas are friction-adjusted.
 
 See [docs/backtest-output.md](docs/backtest-output.md) for a guide to reading and interpreting the output metrics.
 

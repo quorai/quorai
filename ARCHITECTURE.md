@@ -91,7 +91,7 @@ flowchart LR
 | Entry point | Purpose |
 |---|---|
 | `src/main.py` | CLI — single run via `run_quorai()`. Parses args with `src/cli/input.py`, builds and invokes the LangGraph, prints results via `src/utils/display.py`. |
-| `src/backtesting/cli.py` | Backtest CLI — subcommands: (default) single run, `compare` (A/B), `feedback` (label + score). |
+| `src/backtesting/cli.py` | Backtest CLI — subcommands: (default) single run, `compare` (A/B), `feedback` (label + score), `attribution` (per-analyst IC report), `ablation` (gate-disabled delta runs). |
 | `src/mcp_server/server.py` | MCP server — `quorai-mcp` console script. Four FastMCP tools: `run_panel`, `list_analysts`, `get_analyst_info`, `run_single_analyst`. Thin async wrapper around `run_quorai()`; `asyncio.Lock` serializes concurrent panel runs. |
 
 ---
@@ -131,13 +131,15 @@ scales with the active `--risk-profile` preset, read from `state["metadata"]["ri
 
 **Portfolio manager** (`src/agents/portfolio_manager.py`): before calling the LLM, runs
 `compute_allowed_actions(tickers, …, regime, group_signals)` to deterministically filter the action
-space. The regime gate rules:
-- `bull_trend` — removes `short` when quant_systematic or growth_and_catalyst group is bullish
-- `bear_trend` — removes `buy` when quant_systematic or quality_compounders group is bearish
-- `risk_off` — removes both `buy` and `short` (only `hold`, `sell`, `cover` permitted)
+space. Three individually toggleable gates apply in sequence (set env var to `"0"` to disable):
 
-`cover` and `sell` are never blocked (reducing exposure never fights the trend). The LLM then
-receives the pruned action space and a `regime_instruction` block describing the active regime.
+| Gate | Env var | Default | Rule |
+|---|---|---|---|
+| Regime | `QUORAI_GATE_REGIME` | on | `bull_trend` → remove `short` when quant/growth bullish; `bear_trend` → remove `buy` when quant/quality bearish; `risk_off` → remove both |
+| Panel-tilt | `QUORAI_GATE_PANEL` | on | Remove `buy` (tilt ≤ −0.34) or `short` (tilt ≥ +0.34) when ≥ 40% of analysts are directional |
+| Min-hold | `QUORAI_GATE_MIN_HOLD` | on | Block `sell` within 2 cycles of a `buy`; block `cover` within 2 cycles of a `short` |
+
+`cover` and `sell` are never blocked by the regime gate. Cash/margin capacity constraints are always enforced and cannot be toggled. The LLM then receives the pruned action space.
 
 The 25 analysts from `src/utils/analysts.py:ANALYST_CONFIG` (type: "analyst"):
 aswath_damodaran, ben_graham, bill_ackman, cathie_wood, charlie_munger, cliff_asness,
@@ -230,6 +232,7 @@ OpenRouter and Kimi reuse `ChatOpenAI` with a custom `base_url`.
 `BacktestEngine` kwargs that activate optional subsystems:
 - `use_regime_selection: bool = False` — daily SPY regime gate (see **Regime selection** below).
 - `use_conviction_weights: bool = False` — load `weights.json` into debate aggregation (see **Conviction-weight feedback loop** below).
+- `cost_model: CostModel | None = None` — see **Trading cost model** below.
 
 The engine treats `run_quorai` as a black box — the entire graph is rebuilt and invoked once
 per simulated day.
@@ -340,18 +343,63 @@ Both `BacktestEngine` (one `run_quorai` call per ticker per day) and `LiveRunner
 
 ---
 
+### Trading cost model
+
+`src/backtesting/costs.py:CostModel` is a frozen dataclass that parameterises three components
+of trading friction — all default to **zero** so existing tests and frictionless runs are unaffected:
+
+| Field | Meaning | Recommended (liquid US equities) |
+|---|---|---|
+| `slippage_bps` | Per-side price impact. Buys/covers fill at `price × (1 + bps/1e4)`; sells/short-opens at `price × (1 - bps/1e4)`. | 5 |
+| `commission_bps` | Per-trade commission on notional, debited from cash separately (cost-basis stays at execution price). | 2 |
+| `borrow_bps_annual` | Annualised short-borrow carry, accrued daily (`÷ 252`) on open short notional via `Portfolio.accrue_borrow_cost()`. | 50 |
+
+Because costs are charged to `Portfolio.cash`, they propagate through NAV → the equity curve →
+Sharpe/Sortino/maxDD/alpha in `metrics.py` automatically — no metrics rewrite was needed.
+
+Costs are exposed in `BacktestEngine.get_cost_summary()` and printed as a `TRADING COSTS` block in
+the CLI when any component is non-zero.  The three cost parameters are also forwarded through `RunConfig`
+so A/B and ablation runs can vary friction levels.
+
+Enable via CLI flags: `--slippage-bps`, `--commission-bps`, `--borrow-bps-annual`.
+
+---
+
 ### Comparison harness
 
 `src/backtesting/comparison.py:run_comparison()` accepts a list of `RunConfig` dataclasses
 (same fields as `BacktestEngine` kwargs plus a `label: str`), runs each config sequentially,
 and prints a side-by-side table of:
 - Total return, Sharpe, Sortino, max drawdown
-- Total LLM tokens consumed
+- Total LLM tokens consumed, total trading costs
 
 The `compare` subcommand (`python -m src.backtesting compare`) accepts two preset comparisons:
 - `--mode regime` — Full analyst set vs regime-selected subset
 - `--mode weights` — Uniform analyst weights vs conviction weights
 - `--mode both` — Both comparisons sequentially
+
+`run_ablation()` (the `ablation` subcommand) runs a baseline plus one config per disabled PM gate
+(`QUORAI_GATE_REGIME=0`, `QUORAI_GATE_PANEL=0`, `QUORAI_GATE_MIN_HOLD=0`), then prints a delta
+table (return/Sharpe/costs vs baseline).  Cost flags are forwarded so churn deltas are friction-adjusted.
+
+---
+
+### Alpha attribution
+
+`src/backtesting/attribution.py:compute_attribution(labeled_signal_log, horizon)` reads the labeled
+JSONL produced by `feedback/labeler.py` and emits a per-analyst report with:
+
+| Metric | Definition |
+|---|---|
+| `hit_rate` | Fraction of directional signals whose sign matched the forward return |
+| `directional_spread` | Mean forward return when bullish − mean when bearish (crude signal IC) |
+| `conf_weighted_score` | Confidence-weighted mean sign-adjusted return |
+| `alpha_vs_baseline` | Mean return minus the cross-section mean |
+
+Group-level roll-ups (summing all signals from analysts in each of the 6 strategy groups) are appended.
+Output is sorted by `directional_spread` descending and written to JSON.
+
+Run via the `attribution` subcommand after labeling a signal log with `feedback`.
 
 ---
 

@@ -66,6 +66,7 @@ def test_main_run_writes_cli_args_and_result_to_manifest(monkeypatch):
         engine_instance.run_backtest.return_value = fake_metrics
         engine_instance.get_portfolio_values.return_value = fake_values
         engine_instance.get_benchmark.return_value = bm
+        engine_instance.get_cost_summary.return_value = {"total_slippage": 0.0, "total_commission": 0.0, "total_borrow": 0.0, "total_costs": 0.0}
         engine_instance.run_id = "AAPL-2024-01-01-2024-01-31"
         MockEngine.return_value = engine_instance
 

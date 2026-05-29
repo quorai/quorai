@@ -1,4 +1,5 @@
 import json
+import os
 
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -193,10 +194,17 @@ def compute_allowed_actions(
             if k != "hold" and v > 0:
                 pruned[k] = v
 
+        # Gate toggles — read from env at call time so ablation runs can override them.
+        # Set QUORAI_GATE_<X>=0 to disable a gate; any other value (or absent) enables it.
+        # Cash/margin capacity gates are never toggleable — they are correctness constraints.
+        _gate_regime = os.environ.get("QUORAI_GATE_REGIME", "1") != "0"
+        _gate_panel = os.environ.get("QUORAI_GATE_PANEL", "1") != "0"
+        _gate_min_hold = os.environ.get("QUORAI_GATE_MIN_HOLD", "1") != "0"
+
         # Regime gate — deterministically block actions that fight the prevailing trend.
         # "cover" is always allowed (closing a short is not fighting the trend).
         # "sell" is always allowed (reducing a long is not fighting the trend).
-        if regime is not None and group_signals is not None:
+        if _gate_regime and regime is not None and group_signals is not None:
             ticker_groups = group_signals.get(ticker, {})
             if regime == "bull_trend":
                 quant_bull = ticker_groups.get("quant_systematic", {}).get("signal") == "bullish"
@@ -220,7 +228,7 @@ def compute_allowed_actions(
         # Participation floor: only fire when enough analysts have a directional view.
         # A majority-neutral panel (e.g. because fundamentals data is missing) produces
         # a tilt computed from a small sample; blocking on that would be a false signal.
-        if panel_stats is not None:
+        if _gate_panel and panel_stats is not None:
             stats = panel_stats.get(ticker) or {}
             tilt = float(stats.get("tilt", 0.0))
             n_bull = int(stats.get("bullish", 0))
@@ -240,7 +248,7 @@ def compute_allowed_actions(
         # a ticker was a 'buy' within the last _MIN_HOLD_CYCLES cycles, block 'sell'.
         # Symmetrically, block 'cover' after a recent 'short'.
         # 'cover' and 'sell' remain available once the hold window has elapsed.
-        if recent_trades is not None:
+        if _gate_min_hold and recent_trades is not None:
             ticker_trades = recent_trades.get(ticker) or []
             # trades are stored newest-last; look at the last _MIN_HOLD_CYCLES
             recent_n = ticker_trades[-_MIN_HOLD_CYCLES:] if ticker_trades else []

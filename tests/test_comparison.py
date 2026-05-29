@@ -36,6 +36,7 @@ def test_run_comparison_returns_results(mock_engine_cls, tmp_path):
     engine_instance.run_backtest.return_value = _make_metrics()
     engine_instance.get_portfolio_values.return_value = [{"Portfolio Value": 1100.0}]
     engine_instance.get_token_summary.return_value = {"calls": 5, "input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+    engine_instance.get_cost_summary.return_value = {"total_slippage": 0.0, "total_commission": 0.0, "total_borrow": 0.0, "total_costs": 0.0}
     mock_engine_cls.return_value = engine_instance
 
     configs = [_make_config("Run A"), _make_config("Run B")]
@@ -54,6 +55,7 @@ def test_run_comparison_writes_json(mock_engine_cls, tmp_path):
     engine_instance.run_backtest.return_value = _make_metrics(sharpe=0.5)
     engine_instance.get_portfolio_values.return_value = [{"Portfolio Value": 950.0}]
     engine_instance.get_token_summary.return_value = {"calls": 2, "input_tokens": 40, "output_tokens": 20, "total_tokens": 60}
+    engine_instance.get_cost_summary.return_value = {"total_slippage": 0.0, "total_commission": 0.0, "total_borrow": 0.0, "total_costs": 0.0}
     mock_engine_cls.return_value = engine_instance
 
     configs = [_make_config("Only")]
@@ -97,6 +99,7 @@ def test_run_comparison_empty_portfolio_values(mock_engine_cls, tmp_path):
     engine_instance.run_backtest.return_value = _make_metrics()
     engine_instance.get_portfolio_values.return_value = []
     engine_instance.get_token_summary.return_value = {"calls": 1, "total_tokens": 15}
+    engine_instance.get_cost_summary.return_value = {"total_slippage": 0.0, "total_commission": 0.0, "total_borrow": 0.0, "total_costs": 0.0}
     mock_engine_cls.return_value = engine_instance
 
     cfg = _make_config("Empty PV")
